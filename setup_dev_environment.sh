@@ -160,6 +160,64 @@ vim.keymap.set('n', ']d', vim.diagnostic.goto_next, { desc = "Next diagnostic" }
 vim.keymap.set('n', '<leader>e', vim.diagnostic.open_float, { desc = "Show diagnostic float" })
 vim.keymap.set('n', '<leader>q', vim.diagnostic.setloclist, { desc = "Diagnostics to loclist" })
 
+vim.api.nvim_create_autocmd('LspAttach', {
+  callback = function(args)
+    local client = vim.lsp.get_client_by_id(args.data.client_id)
+
+    if client:supports_method('textDocument/inlayHint') then
+      vim.lsp.inlay_hint.enable(true, { bufnr = args.buf })
+    end
+
+    if client:supports_method('textDocument/completion') then
+      vim.lsp.completion.enable(true, client.id, args.buf)
+    end
+
+    local lsp_keymaps = {
+      { 'gd', vim.lsp.buf.definition,      "Goto definition" },
+      { 'gr', vim.lsp.buf.references,      "References" },
+      { 'gi', vim.lsp.buf.implementation,  "Goto implementation" },
+      { 'gO', vim.lsp.buf.document_symbol, "Document symbols" },
+    }
+    for _, m in ipairs(lsp_keymaps) do
+      vim.keymap.set('n', m[1], m[2], { buffer = args.buf, desc = m[3] })
+    end
+  end
+})
+
+-- <C-\>n as a shorthand for the built-in <C-\><C-n> (exit terminal mode)
+vim.keymap.set('t', [[<C-\>n]], [[<C-\><C-n>]], { desc = "Exit terminal mode" })
+
+-- Window/tab navigation from normal, insert, and terminal modes.
+-- <C-\><suffix> lands in normal mode at the destination;
+-- <C-\>i<suffix> additionally enters insert/terminal mode at the destination.
+local nav_targets = {
+  { 'h',  [[<C-w>h]],            "window left" },
+  { 'j',  [[<C-w>j]],            "window down" },
+  { 'k',  [[<C-w>k]],            "window up" },
+  { 'l',  [[<C-w>l]],            "window right" },
+  { 'w',  [[<C-w>w]],            "next window" },
+  { 'p',  [[<C-w>p]],            "previous window" },
+  { 'tn', [[<Cmd>tabnext<CR>]],     "next tab" },
+  { 'tp', [[<Cmd>tabprevious<CR>]], "previous tab" },
+  { 'tf', [[<Cmd>tabfirst<CR>]],    "first tab" },
+  { 'tl', [[<Cmd>tablast<CR>]],     "last tab" },
+}
+local nav_modes = {
+  { 'n', '' },              -- normal: already in normal mode
+  { 'i', [[<C-\><C-n>]] },  -- insert: leave insert first
+  { 't', [[<C-\><C-n>]] },  -- terminal: leave terminal mode first
+}
+for _, mode in ipairs(nav_modes) do
+  local m, escape = mode[1], mode[2]
+  for _, t in ipairs(nav_targets) do
+    local suffix, action, label = t[1], t[2], t[3]
+    vim.keymap.set(m, [[<C-\>]] .. suffix,  escape .. action,
+      { desc = "Goto " .. label })
+    vim.keymap.set(m, [[<C-\>i]] .. suffix, escape .. action .. [[<Cmd>startinsert<CR>]],
+      { desc = "Goto " .. label .. " + insert" })
+  end
+end
+
 -- Forward focus events into :terminal buffers (e.g. Claude Code), combining
 -- nvim's own FocusGained/FocusLost with the buffer/window the user is viewing.
 -- Requires the outer terminal to emit focus reporting and, in tmux,
