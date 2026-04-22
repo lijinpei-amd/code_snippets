@@ -38,16 +38,104 @@ write_managed_block() {
     fi
 }
 
-curl -LsSf https://hf.co/cli/install.sh | bash
-sudo apt-get install -y zsh git curl python3-neovim silversearcher-ag wget tmux
+# ---------------------------------------------------------------------------
+# Distro detection + package abstraction
+# ---------------------------------------------------------------------------
 
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
-sed -i "s/plugins=(git)/plugins=(git vi-mode)/" ~/.zshrc
+DISTRO=
 
-curl -LsSf https://astral.sh/uv/install.sh | sh
+detect_distro() {
+    if [ -r /etc/os-release ]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+    fi
+    case "${ID:-}${ID_LIKE:-}" in
+        *arch*)            DISTRO=arch ;;
+        *debian*|*ubuntu*) DISTRO=debian ;;
+        *)
+            if   command -v pacman  >/dev/null 2>&1; then DISTRO=arch
+            elif command -v apt-get >/dev/null 2>&1; then DISTRO=debian
+            else
+                echo "Unsupported distro: cannot find pacman or apt-get" >&2
+                exit 1
+            fi
+            ;;
+    esac
+}
 
-write_managed_block ~/.tmux.conf "setup_dev_environment" "#" <<'BLOCK'
-set-option -sa terminal-overrides ",xterm*:RGB"
+pkg_name() {
+    case "$DISTRO:$1" in
+        arch:python3-neovim)    echo python-pynvim ;;
+        arch:silversearcher-ag) echo the_silver_searcher ;;
+        arch:gh)                echo github-cli ;;
+        *)                      echo "$1" ;;
+    esac
+}
+
+pkg_install() {
+    local pkgs=()
+    local p
+    for p in "$@"; do pkgs+=("$(pkg_name "$p")"); done
+    case "$DISTRO" in
+        arch)   sudo pacman -S --needed --noconfirm "${pkgs[@]}" ;;
+        debian) sudo apt-get install -y "${pkgs[@]}" ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Components: install_<name> and/or config_<name>
+# ---------------------------------------------------------------------------
+
+ALL_COMPONENTS=(base zsh env bash inputrc tmux nvim git llvm node codex gh uv hf)
+
+install_base() {
+    pkg_install zsh git curl python3-neovim silversearcher-ag wget tmux
+}
+
+install_zsh() {
+    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+}
+
+config_zsh() {
+    if [ -f ~/.zshrc ]; then
+        sed -i "s/plugins=(git)/plugins=(git vi-mode)/" ~/.zshrc
+    fi
+    write_managed_block ~/.zshrc "setup_dev_environment" "#" <<'BLOCK'
+unsetopt BEEP
+source $HOME/.env.sh
+PROMPT="%(!.%{%F{yellow}%}.)$USER @ %{$fg[white]%}%M %{$fg[blue]%}%d"
+PROMPT+=$'\n'
+PROMPT+="%(?:%{$fg_bold[green]%}%1{➜%} :%{$fg_bold[red]%}%1{➜%} ) %{$reset_color%}"
+PROMPT+='$(git_prompt_info)'
+ZSH_THEME_GIT_PROMPT_PREFIX="%{$fg_bold[blue]%}(%{$fg[red]%}"
+BLOCK
+    sudo chsh -s "$(which zsh)" "$(id -un)"
+}
+
+config_env() {
+    write_managed_block ~/.env.sh "setup_dev_environment" "#" <<BLOCK
+alias vim=nvim
+export PATH="$HOME/proot/nvim/bin:\$PATH"
+source $HOME/.local/bin/env
+BLOCK
+}
+
+config_bash() {
+    write_managed_block ~/.bashrc "setup_dev_environment" "#" <<'BLOCK'
+source $HOME/.env.sh
+BLOCK
+}
+
+config_inputrc() {
+    write_managed_block ~/.inputrc "setup_dev_environment" "#" <<'BLOCK'
+set bell-style none
+BLOCK
+}
+
+config_tmux() {
+    write_managed_block ~/.tmux.conf "setup_dev_environment" "#" <<'BLOCK'
+set -g default-terminal "screen-256color"
+set-option -sa terminal-overrides ",xterm*:Tc"
 set -g prefix "C-t"
 unbind-key "C-b"
 bind-key "C-t" send-prefix
@@ -55,37 +143,21 @@ bind-key "C-t" send-prefix
 # can react to focus changes. See ~/.config/nvim/init.lua for the nvim-side
 # handling that propagates these into :terminal buffers.
 set -g focus-events on
+set -g @plugin 'tmux-plugins/tpm'
+set -g @plugin 'christoomey/vim-tmux-navigator'
+# Must be the last line: bootstraps tpm and the @plugin entries above.
+run '~/.tmux/plugins/tpm/tpm'
 BLOCK
+}
 
-write_managed_block ~/.env.sh "setup_dev_environment" "#" <<BLOCK
-alias vim=nvim
-export PATH="$HOME/proot/nvim/bin:\$PATH"
-source $HOME/.local/bin/env
-BLOCK
-
-write_managed_block ~/.zshrc "setup_dev_environment" "#" <<'BLOCK'
-unsetopt BEEP
-source ~/.env.sh
-PROMPT="%(!.%{%F{yellow}%}.)$USER @ %{$fg[white]%}%M %{$fg[blue]%}%d"
-PROMPT+=$'\n'
-PROMPT+="%(?:%{$fg_bold[green]%}%1{➜%} :%{$fg_bold[red]%}%1{➜%} ) %{$reset_color%}"
-PROMPT+='$(git_prompt_info)'
-ZSH_THEME_GIT_PROMPT_PREFIX="%{$fg_bold[blue]%}(%{$fg[red]%}"
-BLOCK
-
-write_managed_block ~/.bashrc "setup_dev_environment" "#" <<'BLOCK'
-source ~/.env.sh
-BLOCK
-
-write_managed_block ~/.inputrc "setup_dev_environment" "#" <<'BLOCK'
-set bell-style none
-BLOCK
-
-sh -c 'curl -fLo "${XDG_DATA_HOME:-$HOME/.local/share}"/nvim/site/autoload/plug.vim --create-dirs \
+install_nvim() {
+    sh -c 'curl -fLo "${XDG_DATA_HOME:-$HOME/.local/share}"/nvim/site/autoload/plug.vim --create-dirs \
        https://raw.githubusercontent.com/junegunn/vim-plug/master/plug.vim'
+}
 
-mkdir -p ~/.config/nvim/
-write_managed_block ~/.config/nvim/init.lua "setup_dev_environment" "--" <<'BLOCK'
+config_nvim() {
+    mkdir -p ~/.config/nvim/
+    write_managed_block ~/.config/nvim/init.lua "setup_dev_environment" "--" <<'BLOCK'
 if vim.g.neovide then
         vim.g.neovide_cursor_animation_length = 0
 end
@@ -178,11 +250,26 @@ local clang_format_py = '/usr/share/clang/clang-format.py'
 vim.keymap.set('v', '<C-K>', ':py3f ' .. clang_format_py .. '<cr>')
 vim.keymap.set('i', '<C-K>', '<c-o>:py3f ' .. clang_format_py .. '<cr>')
 
-vim.lsp.config('clangd', {
-	cmd = { 'clangd-22' },
-	filetypes = { 'c', 'cpp', 'objc', 'objcpp', 'cuda' },
-})
-vim.lsp.enable('clangd')
+-- Pick the highest-numbered clangd-N on PATH, falling back to plain `clangd`.
+-- Works on Arch's unversioned binary and on Ubuntu/Debian where apt.llvm.org
+-- installs versioned suffixes.
+local function pick_clangd()
+	for v = 40, 15, -1 do
+		local cand = 'clangd-' .. v
+		if vim.fn.executable(cand) == 1 then return cand end
+	end
+	if vim.fn.executable('clangd') == 1 then return 'clangd' end
+	return nil
+end
+
+local clangd_cmd = pick_clangd()
+if clangd_cmd then
+	vim.lsp.config('clangd', {
+		cmd = { clangd_cmd },
+		filetypes = { 'c', 'cpp', 'objc', 'objcpp', 'cuda' },
+	})
+	vim.lsp.enable('clangd')
+end
 
 -- Show LSP diagnostics
 vim.diagnostic.config({
@@ -531,30 +618,45 @@ local function switch_to_buffer()
 end
 vim.keymap.set('n', '<leader>b', vim.cmd.Buffers, { desc = "fzf buffer picker" })
 BLOCK
-nvim -c PlugUpgrade -c qall
-nvim -c PlugInstall -c qall
-git config --global user.name "Li Jinpei"
-git config --global user.email "jinpli@amd.com"
-git config --global core.excludesfile "$HOME/.gitignore"
-write_managed_block ~/.gitignore "setup_dev_environment" "#" <<'BLOCK'
+    local plug_vim="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/site/autoload/plug.vim"
+    if [ -f "$plug_vim" ] && command -v nvim >/dev/null 2>&1; then
+        nvim -c PlugUpgrade -c 'PlugInstall --sync' -c qall
+    else
+        echo "    (skipping PlugUpgrade/PlugInstall: vim-plug or nvim not installed)" >&2
+    fi
+}
+
+config_git() {
+    git config --global user.name "Li Jinpei"
+    git config --global user.email "jinpli@amd.com"
+    git config --global core.excludesfile "$HOME/.gitignore"
+    write_managed_block ~/.gitignore "setup_dev_environment" "#" <<'BLOCK'
 .ccls-cache/
 .claude/
 .codex
 BLOCK
-sudo chsh -s "$(which zsh)" "$(id -un)"
+}
 
-# install llvm
-wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 21
+install_llvm() {
+    case "$DISTRO" in
+        arch)   pkg_install llvm clang lld ;;
+        debian) wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 21 ;;
+    esac
+}
 
-wget -qO- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-nvm install node
-npm install -g @anthropic-ai/claude-code
-npm install -g @openai/codex
+install_node() {
+    wget -qO- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash
+    export NVM_DIR="$HOME/.nvm"
+    # shellcheck disable=SC1091
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    nvm install node
+    npm install -g @anthropic-ai/claude-code
+    npm install -g @openai/codex
+}
 
-mkdir -p ~/.codex
-write_managed_block ~/.codex/config.toml "setup_dev_environment" "#" <<'BLOCK'
+config_codex() {
+    mkdir -p ~/.codex
+    write_managed_block ~/.codex/config.toml "setup_dev_environment" "#" <<'BLOCK'
 model_provider = "amd_llm"
 [model_providers.amd_llm]
 name = "amd_llm"
@@ -563,13 +665,151 @@ env_http_headers = {
   "Ocp-Apim-Subscription-Key"="LLM_GATEWAY_KEY",
 }
 BLOCK
+}
 
-(type -p wget >/dev/null || (sudo apt update && sudo apt install wget -y)) \
-	&& sudo mkdir -p -m 755 /etc/apt/keyrings \
-	&& out=$(mktemp) && wget -nv -O"$out" https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-	&& cat "$out" | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
-	&& sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-	&& sudo mkdir -p -m 755 /etc/apt/sources.list.d \
-	&& echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
-	&& sudo apt update \
-	&& sudo apt install gh -y
+install_gh() {
+    case "$DISTRO" in
+        arch)
+            pkg_install gh
+            ;;
+        debian)
+            local keyring=/etc/apt/keyrings/githubcli-archive-keyring.gpg
+            local sources=/etc/apt/sources.list.d/github-cli.list
+            local tmp
+            tmp=$(mktemp)
+            sudo mkdir -p -m 755 /etc/apt/keyrings /etc/apt/sources.list.d
+            wget -nv -O "$tmp" https://cli.github.com/packages/githubcli-archive-keyring.gpg
+            sudo tee "$keyring" >/dev/null < "$tmp"
+            sudo chmod go+r "$keyring"
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=$keyring] https://cli.github.com/packages stable main" \
+                | sudo tee "$sources" >/dev/null
+            sudo apt-get update
+            sudo apt-get install -y gh
+            ;;
+    esac
+}
+
+install_uv() {
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+}
+
+install_hf() {
+    curl -LsSf https://hf.co/cli/install.sh | bash
+}
+
+# ---------------------------------------------------------------------------
+# Driver: arg parsing, validation, dispatch
+# ---------------------------------------------------------------------------
+
+DO_INSTALL=1
+DO_CONFIG=1
+COMPONENTS=()
+
+has_fn() { declare -F "$1" >/dev/null; }
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS]
+
+  --config-only          Skip install steps; run only config steps.
+  --install-only         Skip config steps; run only install steps.
+  --components LIST      Comma-separated component names to act on.
+                         Default: all components.
+  --list-components      Print available components and exit.
+  -h, --help             Show this help.
+
+--config-only and --install-only are mutually exclusive.
+--components is independent: it narrows which components run, in either mode.
+
+Available components:
+  ${ALL_COMPONENTS[*]}
+EOF
+}
+
+list_components() {
+    local c
+    for c in "${ALL_COMPONENTS[@]}"; do
+        local has_install=no has_config=no
+        has_fn "install_$c" && has_install=yes
+        has_fn  "config_$c" && has_config=yes
+        printf '  %-10s  install=%-3s  config=%-3s\n' "$c" "$has_install" "$has_config"
+    done
+}
+
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-only)   DO_INSTALL=0; shift ;;
+            --install-only)  DO_CONFIG=0;  shift ;;
+            --components)
+                [ $# -ge 2 ] || { echo "error: --components needs an argument" >&2; exit 2; }
+                IFS=, read -r -a COMPONENTS <<< "$2"
+                shift 2
+                ;;
+            --components=*)
+                IFS=, read -r -a COMPONENTS <<< "${1#--components=}"
+                shift
+                ;;
+            --list-components) list_components; exit 0 ;;
+            -h|--help)         usage; exit 0 ;;
+            --) shift; break ;;
+            *)
+                echo "error: unknown option: $1" >&2
+                usage >&2
+                exit 2
+                ;;
+        esac
+    done
+    if [ "$DO_INSTALL" -eq 0 ] && [ "$DO_CONFIG" -eq 0 ]; then
+        echo "error: --config-only and --install-only are mutually exclusive" >&2
+        exit 2
+    fi
+}
+
+validate_components() {
+    local known c
+    declare -A known=()
+    for c in "${ALL_COMPONENTS[@]}"; do known[$c]=1; done
+    for c in "$@"; do
+        if [ -z "${known[$c]:-}" ]; then
+            echo "error: unknown component: $c" >&2
+            echo "known components: ${ALL_COMPONENTS[*]}" >&2
+            exit 2
+        fi
+    done
+}
+
+run_component() {
+    local name="$1"
+    if [ "$DO_INSTALL" -eq 1 ] && has_fn "install_$name"; then
+        echo "==> install: $name"
+        "install_$name"
+    fi
+    if [ "$DO_CONFIG" -eq 1 ] && has_fn "config_$name"; then
+        echo "==> config:  $name"
+        "config_$name"
+    fi
+}
+
+main() {
+    parse_args "$@"
+    detect_distro
+    local mode_label
+    if   [ "$DO_INSTALL" -eq 0 ]; then mode_label=config-only
+    elif [ "$DO_CONFIG"  -eq 0 ]; then mode_label=install-only
+    else mode_label=full; fi
+    echo "==> distro: $DISTRO   mode: $mode_label"
+
+    local selected
+    if [ "${#COMPONENTS[@]}" -eq 0 ]; then
+        selected=("${ALL_COMPONENTS[@]}")
+    else
+        selected=("${COMPONENTS[@]}")
+    fi
+    validate_components "${selected[@]}"
+
+    local c
+    for c in "${selected[@]}"; do run_component "$c"; done
+}
+
+main "$@"
