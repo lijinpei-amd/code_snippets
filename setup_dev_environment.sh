@@ -22,12 +22,14 @@ write_managed_block() {
     mkdir -p "$(dirname "$file")"
     if [ ! -f "$file" ]; then
         printf '%s\n' "$block" > "$file"
-    elif grep -qF "$begin" "$file"; then
+    elif grep -qF -- "$begin" "$file"; then
         local tmp
         tmp="$(mktemp)"
-        awk -v b="$begin" -v e="$end" -v blk="$block" '
+        # Pass block via ENVIRON: awk -v interprets backslash escapes (\n, \t, \\),
+        # which corrupts code containing those sequences.
+        WMB_BLOCK="$block" awk -v b="$begin" -v e="$end" '
             $0 == b { skip=1 }
-            skip && $0 == e { print blk; skip=0; next }
+            skip && $0 == e { print ENVIRON["WMB_BLOCK"]; skip=0; next }
             !skip { print }
         ' "$file" > "$tmp"
         mv "$tmp" "$file"
@@ -105,6 +107,8 @@ vim.fn['plug#']('mhinz/vim-grepper')
 vim.fn['plug#']('vim-airline/vim-airline')
 vim.fn['plug#']('vim-airline/vim-airline-themes')
 vim.fn['plug#']('powerman/vim-plugin-ansiesc')
+vim.fn['plug#']('junegunn/fzf', { ['do'] = './install --bin' })
+vim.fn['plug#']('junegunn/fzf.vim')
 vim.fn['plug#end']()
 vim.cmd.colorscheme("solarized8")
 
@@ -284,16 +288,6 @@ local function emacs_default_buffer()
 	return -1
 end
 
-local function find_buffer_by_name(name)
-	for _, info in ipairs(vim.fn.getbufinfo({ buflisted = 1 })) do
-		local bn = vim.fn.bufname(info.bufnr)
-		if bn == name or vim.fn.fnamemodify(bn, ":t") == name then
-			return info.bufnr
-		end
-	end
-	return -1
-end
-
 local function switch_to_buffer()
 	local default_buf = emacs_default_buffer()
 	local default_label
@@ -304,29 +298,203 @@ local function switch_to_buffer()
 	local prompt = default_label
 		and string.format("Switch to buffer (default %s): ", default_label)
 		or "Switch to buffer: "
-	local sentinel = "\0"
-	local ok, input = pcall(vim.fn.input, {
-		prompt = prompt,
-		completion = "buffer",
-		cancelreturn = sentinel,
+
+	local candidates = {}
+	for _, info in ipairs(vim.fn.getbufinfo({ buflisted = 1 })) do
+		local full = info.name or ""
+		local short = (full ~= "" and vim.fn.fnamemodify(full, ":t"))
+			or ("[No Name " .. info.bufnr .. "]")
+		local has_full = full ~= "" and full ~= short
+		table.insert(candidates, {
+			bufnr = info.bufnr,
+			short = short,
+			full = full,
+			short_lower = short:lower(),
+			full_lower = has_full and full:lower() or nil,
+			label = has_full and (short .. "  " .. full) or short,
+			lastused = info.lastused or 0,
+		})
+	end
+	table.sort(candidates, function(a, b) return a.lastused > b.lastused end)
+
+	local function fuzzy_score(text, t_match, q)
+		local tlen, qlen = #t_match, #q
+		if qlen > tlen then return nil end
+		local score, last, consec, first = 0, 0, 0, nil
+		local ti = 1
+		for qi = 1, qlen do
+			local qc = q:sub(qi, qi)
+			local pos
+			while ti <= tlen do
+				if t_match:sub(ti, ti) == qc then pos = ti; ti = ti + 1; break end
+				ti = ti + 1
+			end
+			if not pos then return nil end
+			if not first then first = pos end
+			if pos == 1 then
+				score = score + 12
+			else
+				local pc = text:sub(pos - 1, pos - 1)
+				if pc == "/" or pc == "_" or pc == "-" or pc == "." or pc == " " then
+					score = score + 10
+				elseif pc:match("%l") and text:sub(pos, pos):match("%u") then
+					score = score + 8
+				end
+			end
+			if pos == last + 1 then
+				consec = consec + 1
+				score = score + 5 + consec
+			else
+				consec = 0
+				if last > 0 then score = score - (pos - last - 1) end
+			end
+			last = pos
+		end
+		return score - tlen * 0.05 - (first - 1) * 0.5
+	end
+
+	local function filter(q)
+		if q == "" then return candidates end
+		local cs = q:match("%u") ~= nil
+		local qm = cs and q or q:lower()
+		local scored = {}
+		for _, c in ipairs(candidates) do
+			local s_short = fuzzy_score(c.short, cs and c.short or c.short_lower, qm)
+			local s_full
+			if c.full_lower then
+				s_full = fuzzy_score(c.full, cs and c.full or c.full_lower, qm)
+			end
+			local best = s_short
+			if s_full and (not best or s_full > best) then best = s_full end
+			if best then table.insert(scored, { c = c, score = best }) end
+		end
+		table.sort(scored, function(a, b)
+			if a.score ~= b.score then return a.score > b.score end
+			return a.c.lastused > b.c.lastused
+		end)
+		local out = {}
+		for _, e in ipairs(scored) do table.insert(out, e.c) end
+		return out
+	end
+
+	local buf = vim.api.nvim_create_buf(false, true)
+	local width = math.min(vim.o.columns - 4, math.max(50, math.floor(vim.o.columns * 0.6)))
+	local height = math.min(12, math.max(5, #candidates + 1))
+	local win = vim.api.nvim_open_win(buf, false, {
+		relative = "editor",
+		row = math.max(1, math.floor((vim.o.lines - height) / 2)),
+		col = math.max(0, math.floor((vim.o.columns - width) / 2)),
+		width = width,
+		height = height,
+		style = "minimal",
+		border = "rounded",
 	})
-	if not ok or input == sentinel then return end
-	if input == "" then
-		if default_buf > 0 then vim.cmd("buffer " .. default_buf) end
-		return
+	local ns = vim.api.nvim_create_namespace("switch_to_buffer")
+
+	local query = ""
+	local selected = 1
+	local view_start = 1
+	local matches = {}
+
+	local function render()
+		matches = filter(query)
+		if #matches == 0 then
+			selected = 0
+		else
+			if selected < 1 then selected = 1 end
+			if selected > #matches then selected = #matches end
+		end
+		local list_h = height - 1
+		if selected > 0 then
+			if selected < view_start then view_start = selected end
+			if selected >= view_start + list_h then view_start = selected - list_h + 1 end
+		else
+			view_start = 1
+		end
+
+		local lines = { prompt .. query }
+		local last = math.min(#matches, view_start + list_h - 1)
+		for i = view_start, last do
+			table.insert(lines, "  " .. matches[i].label)
+		end
+		if #matches == 0 and query ~= "" then
+			table.insert(lines, "  (no match — <CR> creates '" .. query .. "')")
+		end
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+		vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+		vim.api.nvim_buf_add_highlight(buf, ns, "Question", 0, 0, #prompt)
+		if selected > 0 then
+			local lnum = (selected - view_start) + 1
+			vim.api.nvim_buf_add_highlight(buf, ns, "PmenuSel", lnum, 0, -1)
+		end
 	end
-	local target = find_buffer_by_name(input)
-	if target > 0 then
-		vim.cmd("buffer " .. target)
-		return
+
+	local function cleanup()
+		if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
+		if vim.api.nvim_buf_is_valid(buf) then vim.api.nvim_buf_delete(buf, { force = true }) end
 	end
-	local choice = vim.fn.confirm(
-		string.format("[Confirm] Buffer '%s' does not exist. Create?", input),
-		"&Yes\n&No", 1)
-	if choice ~= 1 then return end
-	vim.cmd("edit " .. vim.fn.fnameescape(input))
+
+	render()
+	vim.cmd("redraw")
+
+	while true do
+		local ok, raw = pcall(vim.fn.getcharstr)
+		if not ok then cleanup() return end
+		local key = vim.fn.keytrans(raw)
+		local dirty = false
+		if key == "<Esc>" or key == "<C-c>" or key == "<C-g>" then
+			cleanup()
+			return
+		elseif key == "<CR>" or key == "<NL>" or key == "<kEnter>" then
+			cleanup()
+			if #matches > 0 and selected > 0 then
+				vim.cmd("buffer " .. matches[selected].bufnr)
+			elseif query == "" and default_buf > 0 then
+				vim.cmd("buffer " .. default_buf)
+			elseif query ~= "" then
+				local choice = vim.fn.confirm(
+					string.format("[Confirm] Buffer '%s' does not exist. Create?", query),
+					"&Yes\n&No", 1)
+				if choice == 1 then vim.cmd("edit " .. vim.fn.fnameescape(query)) end
+			end
+			return
+		elseif key == "<Down>" or key == "<C-n>" or key == "<Tab>" then
+			selected = selected + 1
+			dirty = true
+		elseif key == "<Up>" or key == "<C-p>" or key == "<S-Tab>" then
+			selected = selected - 1
+			dirty = true
+		elseif key == "<BS>" or key == "<C-h>" then
+			if #query > 0 then
+				query = query:sub(1, -2)
+				selected = 1
+				dirty = true
+			end
+		elseif key == "<C-u>" then
+			if #query > 0 then
+				query = ""
+				selected = 1
+				dirty = true
+			end
+		elseif key == "<C-w>" then
+			local trimmed = (query:gsub("%S+%s*$", ""))
+			if trimmed ~= query then
+				query = trimmed
+				selected = 1
+				dirty = true
+			end
+		elseif #raw >= 1 and not raw:match("^%c") then
+			query = query .. raw
+			selected = 1
+			dirty = true
+		end
+		if dirty then
+			render()
+			vim.cmd("redraw")
+		end
+	end
 end
-vim.keymap.set('n', '<leader>b', switch_to_buffer, { desc = "Emacs-style switch-to-buffer" })
+vim.keymap.set('n', '<leader>b', vim.cmd.Buffers, { desc = "fzf buffer picker" })
 BLOCK
 nvim -c PlugUpgrade -c qall
 nvim -c PlugInstall -c qall
