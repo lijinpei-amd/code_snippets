@@ -535,6 +535,12 @@ nvim -c PlugUpgrade -c qall
 nvim -c PlugInstall -c qall
 git config --global user.name "Li Jinpei"
 git config --global user.email "jinpli@amd.com"
+git config --global core.excludesfile "$HOME/.gitignore"
+write_managed_block ~/.gitignore "setup_dev_environment" "#" <<'BLOCK'
+.ccls-cache/
+.claude/
+.codex
+BLOCK
 sudo chsh -s "$(which zsh)" "$(id -un)"
 
 # install llvm
