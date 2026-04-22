@@ -96,21 +96,52 @@ vim.opt.background = "dark"
 vim.opt.hlsearch = true
 vim.opt.expandtab = true
 vim.opt.switchbuf = { "useopen", "usetab", "newtab" }
+vim.opt.virtualedit = { "all", "onemore" }
+
+vim.api.nvim_create_user_command("Ninja", function(opts)
+	local saved = vim.o.makeprg
+	vim.o.makeprg = "ninja"
+	local ok, err = pcall(vim.cmd, "make " .. opts.args)
+	vim.o.makeprg = saved
+	if not ok then error(err) end
+end, { nargs = "*" })
+
 vim.fn['plug#begin']()
 vim.fn['plug#']('lifepillar/vim-solarized8', { branch = 'neovim' })
 vim.fn['plug#']('overcache/NeoSolarized')
 vim.fn['plug#']('tomasr/molokai')
 vim.fn['plug#']('dracula/vim')
 vim.fn['plug#']('mhartington/oceanic-next')
+vim.fn['plug#']('morhetz/gruvbox')
+vim.fn['plug#']('sainnhe/sonokai')
+vim.fn['plug#']('sainnhe/everforest')
+vim.fn['plug#']('catppuccin/nvim')
+vim.fn['plug#']('cocopon/iceberg.vim')
+vim.fn['plug#']('rakr/vim-one')
+vim.fn['plug#']('sonph/onehalf')
+vim.fn['plug#']('lewis6991/moonlight.vim')
+vim.fn['plug#']('folke/tokyonight.nvim')
+vim.fn['plug#']('savq/melange-nvim')
 vim.fn['plug#']('mileszs/ack.vim')
 vim.fn['plug#']('mhinz/vim-grepper')
 vim.fn['plug#']('vim-airline/vim-airline')
 vim.fn['plug#']('vim-airline/vim-airline-themes')
 vim.fn['plug#']('powerman/vim-plugin-ansiesc')
+vim.fn['plug#']('nvim-tree/nvim-web-devicons')
+vim.fn['plug#']('preservim/nerdtree')
+vim.fn['plug#']('tiagofumo/vim-nerdtree-syntax-highlight')
+vim.fn['plug#']('sindrets/diffview.nvim')
+vim.fn['plug#']('preservim/tagbar')
+vim.fn['plug#']('christoomey/vim-tmux-navigator')
+vim.fn['plug#']('preservim/vimux')
+vim.fn['plug#']('sakhnik/nvim-gdb', { ['do'] = ':!./install.sh' })
+vim.fn['plug#']('rust-lang/rust.vim')
+vim.fn['plug#']('vim-autoformat/vim-autoformat')
+vim.fn['plug#']('nvim-lua/plenary.nvim')
 vim.fn['plug#']('junegunn/fzf', { ['do'] = './install --bin' })
 vim.fn['plug#']('junegunn/fzf.vim')
 vim.fn['plug#end']()
-vim.cmd.colorscheme("solarized8")
+vim.cmd.colorscheme("NeoSolarized")
 
 -- C/C++: 2-space indent with cindent
 vim.api.nvim_create_autocmd("FileType", {
@@ -143,6 +174,10 @@ vim.api.nvim_create_autocmd("FileType", {
 	end,
 })
 
+local clang_format_py = '/usr/share/clang/clang-format.py'
+vim.keymap.set('v', '<C-K>', ':py3f ' .. clang_format_py .. '<cr>')
+vim.keymap.set('i', '<C-K>', '<c-o>:py3f ' .. clang_format_py .. '<cr>')
+
 vim.lsp.config('clangd', {
 	cmd = { 'clangd-22' },
 	filetypes = { 'c', 'cpp', 'objc', 'objcpp', 'cuda' },
@@ -155,7 +190,7 @@ vim.diagnostic.config({
 	signs = true,
 	underline = true,
 	update_in_insert = false,
-	float = { border = "rounded", source = true },
+	float = { border = "rounded", source = true, max_width = 80, max_height = 20 },
 })
 
 -- Keymaps for navigating diagnostics
