@@ -89,6 +89,7 @@ def setup_workspace(identifier, parent_dir, force=False):
             continue
 
         print(f"Adding worktree for {repo_name} (from {start_point})...")
+        run(["git", "--git-dir", str(bare_repo), "worktree", "prune"])
         run([
             "git", "--git-dir", str(bare_repo),
             "worktree", "add", "--detach",
