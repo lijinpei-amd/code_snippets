@@ -38,6 +38,18 @@ write_managed_block() {
     fi
 }
 
+# json_patch FILE [JQ_ARGS...] — atomically apply a jq filter to a JSON file,
+# seeding with {} if the file does not exist yet.
+json_patch() {
+    local file="$1"; shift
+    mkdir -p "$(dirname "$file")"
+    local input='{}'
+    [ -f "$file" ] && input=$(cat "$file")
+    local tmp
+    tmp=$(mktemp)
+    printf '%s' "$input" | jq "$@" > "$tmp" && mv "$tmp" "$file"
+}
+
 # ---------------------------------------------------------------------------
 # Distro detection + package abstraction
 # ---------------------------------------------------------------------------
@@ -86,10 +98,10 @@ pkg_install() {
 # Components: install_<name> and/or config_<name>
 # ---------------------------------------------------------------------------
 
-ALL_COMPONENTS=(base zsh env bash inputrc tmux nvim git llvm node codex gh uv hf)
+ALL_COMPONENTS=(base zsh env bash inputrc tmux nvim git llvm node codex claude gh uv hf)
 
 install_base() {
-    pkg_install zsh git curl python3-neovim silversearcher-ag wget tmux
+    pkg_install zsh git curl python3-neovim silversearcher-ag wget tmux jq
 }
 
 install_zsh() {
@@ -661,6 +673,7 @@ config_codex() {
     mkdir -p ~/.codex
     write_managed_block ~/.codex/config.toml "setup_dev_environment" "#" <<'BLOCK'
 model_provider = "amd_llm"
+personality = "pragmatic"
 [model_providers.amd_llm]
 name = "amd_llm"
 base_url = "https://llm-api.amd.com/OpenAI/"
@@ -668,6 +681,22 @@ env_http_headers = {
   "Ocp-Apim-Subscription-Key"="LLM_GATEWAY_KEY",
 }
 BLOCK
+}
+
+config_claude() {
+    json_patch ~/.claude.json '.hasCompletedOnboarding = true'
+    json_patch ~/.claude/settings.json '. * {
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://llm-api.amd.com/Anthropic",
+        "ANTHROPIC_API_KEY": "dummy",
+        "ANTHROPIC_CUSTOM_HEADERS": "Ocp-Apim-Subscription-Key: \n",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "ANTHROPIC_MODEL": "opus",
+        "CLAUDE_CODE_EFFORT_LEVEL": "max"
+      },
+      "theme": "auto",
+      "skipDangerousModePermissionPrompt": true
+    }'
 }
 
 install_gh() {
