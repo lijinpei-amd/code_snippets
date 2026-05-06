@@ -7,6 +7,7 @@ import functools
 import io
 import json
 import os
+import urllib.error
 import urllib.request
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
@@ -31,8 +32,13 @@ def fetch_usage(start: date, end: date, api_key: str) -> dict:
         f"{BASE_URL}?{params}",
         headers={"Ocp-Apim-Subscription-Key": api_key},
     )
-    with urllib.request.urlopen(req) as resp:
-        return json.load(resp)
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {"message": "No usage data."}
+        raise
 
 
 # ── formatting helpers ─────────────────────────────────────────────────────────
