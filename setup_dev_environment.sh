@@ -101,7 +101,7 @@ pkg_install() {
 ALL_COMPONENTS=(base zsh env bash inputrc tmux nvim git llvm node codex claude gh uv hf)
 
 install_base() {
-    pkg_install zsh git curl python3-neovim silversearcher-ag wget tmux jq
+    pkg_install zsh git curl python3-neovim silversearcher-ag wget tmux jq ccache
 }
 
 install_zsh() {
@@ -655,7 +655,14 @@ BLOCK
 install_llvm() {
     case "$DISTRO" in
         arch)   pkg_install llvm clang lld ;;
-        debian) wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 21 ;;
+        debian)
+            local v=22
+            wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- "$v"
+            sudo update-alternatives --install /usr/bin/clang   clang   "/usr/bin/clang-$v"   100
+            sudo update-alternatives --install /usr/bin/clang++ clang++ "/usr/bin/clang++-$v" 100
+            sudo update-alternatives --set clang   "/usr/bin/clang-$v"
+            sudo update-alternatives --set clang++ "/usr/bin/clang++-$v"
+            ;;
     esac
 }
 
