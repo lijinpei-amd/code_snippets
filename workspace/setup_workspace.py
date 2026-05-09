@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Set up a new development workspace.
 
-Creates a workspace directory, checks out worktrees from bare repos,
-and sets up a Python virtual environment.
+Creates a workspace directory, checks out detached worktrees from local clones
+in REPOS_DIR (started at each repo's upstream default branch), and sets up a
+Python virtual environment.
 """
 
 import argparse
@@ -30,7 +31,7 @@ def run(cmd, **kwargs):
 
 
 def ensure_repos():
-    """Ensure REPOS_DIR exists and contains a bare clone for each URL in repos.txt."""
+    """Ensure REPOS_DIR exists and contains a clone for each URL in repos.txt."""
     if not REPOS_LIST.is_file():
         print(f"Warning: {REPOS_LIST} not found, skipping repo bootstrap.", file=sys.stderr)
         return
@@ -43,9 +44,7 @@ def ensure_repos():
         if not url or url.startswith("#"):
             continue
 
-        repo_name = url.rstrip("/").rsplit("/", 1)[-1]
-        if not repo_name.endswith(".git"):
-            repo_name += ".git"
+        repo_name = url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         target = REPOS_DIR / repo_name
 
         if target.exists():
@@ -56,19 +55,58 @@ def ensure_repos():
     if not pending:
         return
 
-    def clone(url, target):
-        print(f"Cloning bare repo {url} -> {target}...")
-        run(["git", "clone", "--bare", url, str(target)])
-
     with ThreadPoolExecutor(max_workers=min(4, len(pending))) as pool:
-        for fut in [pool.submit(clone, url, target) for url, target in pending]:
+        for fut in [pool.submit(clone_detached, url, target) for url, target in pending]:
             fut.result()
 
 
-def discover_bare_repos():
-    repos = sorted(REPOS_DIR.glob("*.git"))
+def find_default_upstream_ref(repo):
+    """Return e.g. 'origin/main' by asking git what the remote's HEAD points to."""
+    result = subprocess.run(
+        ["git", "-C", str(repo), "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def clone_detached(url, target):
+    """Clone url into target with a detached HEAD at the upstream default commit.
+
+    Leaves the central clone with no local branches so it acts as a pure source
+    of objects and refs.
+    """
+    print(f"Cloning {url} -> {target}...")
+    run(["git", "clone", "--no-checkout", url, str(target)])
+
+    ref = find_default_upstream_ref(target)
+    if ref is None:
+        print(
+            f"Warning: no default upstream branch in {target.name}; "
+            f"leaving working tree empty.",
+            file=sys.stderr,
+        )
+        return
+
+    print(f"Detaching {target.name} at {ref}...")
+    run(["git", "-C", str(target), "checkout", "--detach", ref])
+
+    local_branches = subprocess.run(
+        ["git", "-C", str(target), "for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+        capture_output=True, text=True, check=True,
+    ).stdout.split()
+    if local_branches:
+        run(["git", "-C", str(target), "branch", "-D", *local_branches])
+
+
+def discover_repos():
+    if not REPOS_DIR.is_dir():
+        print(f"Warning: no repos found in {REPOS_DIR}", file=sys.stderr)
+        return []
+    repos = sorted(p for p in REPOS_DIR.iterdir() if p.is_dir() and (p / ".git").exists())
     if not repos:
-        print(f"Warning: no bare repos found in {REPOS_DIR}", file=sys.stderr)
+        print(f"Warning: no repos found in {REPOS_DIR}", file=sys.stderr)
     return repos
 
 
@@ -78,58 +116,39 @@ def activate_venv(venv_path):
     os.environ["VIRTUAL_ENV"] = str(venv_path)
 
 
-def find_default_branch(bare_repo):
-    """Find main or master branch in a bare repo."""
-    result = subprocess.run(
-        ["git", "--git-dir", str(bare_repo), "branch", "--list", "main", "master"],
-        capture_output=True, text=True,
-    )
-    for line in result.stdout.splitlines():
-        name = line.strip().lstrip("* ")
-        if name in ("main", "master"):
-            return name
-    return None
-
-
-def remove_worktrees(workspace, bare_repos):
-    """Remove git worktrees that were checked out into the workspace."""
-    for bare_repo in bare_repos:
-        repo_name = bare_repo.name.removesuffix(".git")
+def remove_worktrees(workspace, repos):
+    for repo in repos:
+        repo_name = repo.name
         worktree_path = workspace / repo_name
 
         if worktree_path.is_dir():
             print(f"Removing worktree {worktree_path}...")
             subprocess.run(
-                ["git", "--git-dir", str(bare_repo), "worktree", "remove", "--force", str(worktree_path)],
+                ["git", "-C", str(repo), "worktree", "remove", "--force", str(worktree_path)],
                 check=False,
             )
 
-        # Clean up stale git worktree metadata if the directory is already gone
-        # but the registration remains under <bare-repo>/worktrees/<name>/
-        worktree_meta = bare_repo / "worktrees" / repo_name
+        # Drop stale registration if the worktree dir was deleted out-of-band.
+        worktree_meta = repo / ".git" / "worktrees" / repo_name
         shutil.rmtree(worktree_meta, ignore_errors=True)
 
 
-def add_worktree(workspace, bare_repo):
-    """Add a worktree for bare_repo into workspace if not already present.
-
-    Returns the project name if a worktree was added, otherwise None.
-    """
-    repo_name = bare_repo.name.removesuffix(".git")
+def add_worktree(workspace, repo):
+    """Returns the project name if a worktree was added, otherwise None."""
+    repo_name = repo.name
     worktree_path = workspace / repo_name
 
     if worktree_path.is_dir():
         return None
 
-    start_point = find_default_branch(bare_repo)
+    start_point = find_default_upstream_ref(repo)
     if start_point is None:
-        print(f"Warning: no main or master branch in {bare_repo.name}, skipping.", file=sys.stderr)
+        print(f"Warning: no default upstream branch in {repo.name}, skipping.", file=sys.stderr)
         return None
 
-    print(f"Adding worktree for {repo_name} (from {start_point})...")
-    run(["git", "--git-dir", str(bare_repo), "worktree", "prune"])
+    print(f"Adding worktree for {repo_name} (detached at {start_point})...")
     run([
-        "git", "--git-dir", str(bare_repo),
+        "git", "-C", str(repo),
         "worktree", "add", "--detach",
         str(worktree_path),
         start_point,
@@ -142,25 +161,25 @@ def setup_workspace(identifier, parent_dir, force=False):
 
     ensure_repos()
 
-    bare_repos = discover_bare_repos()
+    repos = discover_repos()
 
     if workspace.exists():
         if not force:
             print(f"Error: workspace '{workspace}' already exists.", file=sys.stderr)
             sys.exit(1)
         print(f"Removing existing workspace: {workspace}")
-        remove_worktrees(workspace, bare_repos)
+        remove_worktrees(workspace, repos)
         shutil.rmtree(workspace)
 
     print(f"Creating workspace: {workspace}")
     workspace.mkdir(parents=True)
 
-    for bare_repo in bare_repos:
-        add_worktree(workspace, bare_repo)
+    for repo in repos:
+        add_worktree(workspace, repo)
 
-    venv_path = workspace / "venv" / identifier
+    venv_path = workspace / "venv"
     print(f"Creating virtual environment at {venv_path}...")
-    run(["uv", "venv", "--system-site-packages", str(venv_path)])
+    run(["uv", "venv", "--system-site-packages", "--prompt", identifier, str(venv_path)])
     activate_venv(venv_path)
 
     if SETUP_VENV_SCRIPT.exists():
@@ -215,8 +234,8 @@ def update_workspace(identifier, parent_dir):
     ensure_repos()
 
     added = []
-    for bare_repo in discover_bare_repos():
-        project = add_worktree(workspace, bare_repo)
+    for repo in discover_repos():
+        project = add_worktree(workspace, repo)
         if project is not None:
             added.append(project)
 
@@ -224,7 +243,7 @@ def update_workspace(identifier, parent_dir):
         print("No new worktrees added; workspace is already up to date.")
         return
 
-    venv_path = workspace / "venv" / identifier
+    venv_path = workspace / "venv"
     if venv_path.is_dir():
         activate_venv(venv_path)
 
