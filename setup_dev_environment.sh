@@ -158,6 +158,7 @@ bind-key "C-t" send-prefix
 # can react to focus changes. See ~/.config/nvim/init.lua for the nvim-side
 # handling that propagates these into :terminal buffers.
 set -g focus-events on
+set-window-option -g mode-keys vi
 set -g @plugin 'tmux-plugins/tpm'
 set -g @plugin 'christoomey/vim-tmux-navigator'
 # Must be the last line: bootstraps tpm and the @plugin entries above.
