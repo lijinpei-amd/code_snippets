@@ -692,11 +692,13 @@ BLOCK
 
 config_claude() {
     json_patch ~/.claude.json '.hasCompletedOnboarding = true'
-    json_patch ~/.claude/settings.json '. * {
+    local headers="Ocp-Apim-Subscription-Key: ${LLM_GATEWAY_KEY}
+user: ${USER}"
+    json_patch ~/.claude/settings.json --arg headers "$headers" '. * {
       "env": {
         "ANTHROPIC_BASE_URL": "https://llm-api.amd.com/Anthropic",
         "ANTHROPIC_API_KEY": "dummy",
-        "ANTHROPIC_CUSTOM_HEADERS": "Ocp-Apim-Subscription-Key: \n",
+        "ANTHROPIC_CUSTOM_HEADERS": $headers,
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "ANTHROPIC_MODEL": "opus",
         "CLAUDE_CODE_EFFORT_LEVEL": "max"
