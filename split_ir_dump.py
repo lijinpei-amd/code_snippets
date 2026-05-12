@@ -8,8 +8,9 @@ import sys
 
 # LLVM new PM:    ; *** IR Dump After PassName on [module] ***
 # LLVM legacy PM:   *** IR Dump After Human Name (slug) ***
+# MachineIR:      # *** IR Dump After Human Name (slug) ***:
 # MLIR:           // -----// IR Dump Before PassName (slug) ('builtin.module' operation) //----- //
-LLVM_HEADER_RE = re.compile(r"^;? ?\*\*\* IR Dump (After|Before) (.+?) \*\*\*")
+LLVM_HEADER_RE = re.compile(r"^[;#]? ?\*\*\* IR Dump (After|Before) (.+?) \*\*\*:?")
 MLIR_HEADER_RE = re.compile(r"^// -+// IR Dump (After|Before) (.+?) //-+ //")
 TEMPLATE_RE = re.compile(r"<.*?>")
 NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]+")
@@ -51,7 +52,7 @@ def main():
 
     try:
         for line in inp:
-            if line and line[0] in ";*/":
+            if "IR Dump " in line:
                 m = LLVM_HEADER_RE.match(line) or MLIR_HEADER_RE.match(line)
             else:
                 m = None
@@ -61,7 +62,12 @@ def main():
 
                 direction = m.group(1)
                 pass_info = m.group(2)
-                ext = ".mlir" if line.startswith("//") else ".ll"
+                if line.startswith("//"):
+                    ext = ".mlir"
+                elif line.startswith("#"):
+                    ext = ".mir"
+                else:
+                    ext = ".ll"
 
                 if direction == "Before":
                     if pending_name is None:
