@@ -36,7 +36,7 @@ def fetch_usage(start: date, end: date, api_key: str) -> dict:
         with urllib.request.urlopen(req) as resp:
             return json.load(resp)
     except urllib.error.HTTPError as e:
-        if e.code == 404:
+        if e.code in (400, 404):
             return {"message": "No usage data."}
         raise
 
