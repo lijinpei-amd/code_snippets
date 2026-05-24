@@ -339,10 +339,6 @@ local nav_targets = {
   { 'l',  [[<C-w>l]],            "window right" },
   { 'w',  [[<C-w>w]],            "next window" },
   { 'p',  [[<C-w>p]],            "previous window" },
-  { 'tn', [[<Cmd>tabnext<CR>]],     "next tab" },
-  { 'tp', [[<Cmd>tabprevious<CR>]], "previous tab" },
-  { 'tf', [[<Cmd>tabfirst<CR>]],    "first tab" },
-  { 'tl', [[<Cmd>tablast<CR>]],     "last tab" },
 }
 local nav_modes = {
   { 'n', '' },              -- normal: already in normal mode
@@ -357,6 +353,17 @@ for _, mode in ipairs(nav_modes) do
       { desc = "Goto " .. label })
     vim.keymap.set(m, [[<C-\>i]] .. suffix, escape .. action .. [[<Cmd>startinsert<CR>]],
       { desc = "Goto " .. label .. " + insert" })
+  end
+end
+
+-- <C-\>{count}gt/gT in any mode: map digits and g individually so Vim's native count+gt machinery picks up after the prefix is translated away.
+for _, mode in ipairs(nav_modes) do
+  local m, escape = mode[1], mode[2]
+  vim.keymap.set(m, [[<C-\>g]], escape .. 'g',
+    { desc = "Tab navigate (gt/gT)" })
+  for d = 1, 9 do
+    vim.keymap.set(m, [[<C-\>]] .. d, escape .. d,
+      { desc = "Start tab-nav count " .. d })
   end
 end
 
