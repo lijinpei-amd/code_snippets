@@ -105,6 +105,10 @@ install_base() {
 }
 
 install_zsh() {
+    if [ -d "${ZSH:-$HOME/.oh-my-zsh}" ]; then
+        echo "oh-my-zsh already installed, skipping"
+        return 0
+    fi
     sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
 }
 
@@ -121,7 +125,7 @@ PROMPT+="%(?:%{$fg_bold[green]%}%1{➜%} :%{$fg_bold[red]%}%1{➜%} ) %{$reset_c
 PROMPT+='$(git_prompt_info)'
 ZSH_THEME_GIT_PROMPT_PREFIX="%{$fg_bold[blue]%}(%{$fg[red]%}"
 BLOCK
-    sudo chsh -s "$(which zsh)" "$(id -un)"
+    sudo usermod -s "$(which zsh)" "$(id -un)"
 }
 
 config_env() {
