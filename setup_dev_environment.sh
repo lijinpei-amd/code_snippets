@@ -712,7 +712,7 @@ user: ${USER}"
         "ANTHROPIC_API_KEY": "dummy",
         "ANTHROPIC_CUSTOM_HEADERS": $headers,
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-        "ANTHROPIC_MODEL": "opus",
+        "ANTHROPIC_MODEL": "opus[1m]",
         "CLAUDE_CODE_EFFORT_LEVEL": "max"
       },
       "theme": "auto",
