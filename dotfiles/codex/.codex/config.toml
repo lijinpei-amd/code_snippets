@@ -1,0 +1,8 @@
+model_provider = "amd_llm"
+personality = "pragmatic"
+[model_providers.amd_llm]
+name = "amd_llm"
+base_url = "https://llm-api.amd.com/OpenAI/"
+env_http_headers = {
+  "Ocp-Apim-Subscription-Key"="LLM_GATEWAY_KEY",
+}

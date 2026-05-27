@@ -1,0 +1,7 @@
+unsetopt BEEP
+source $HOME/.env.sh
+PROMPT="%(!.%{%F{yellow}%}.)$USER @ %{$fg[white]%}%M %{$fg[blue]%}%d"
+PROMPT+=$'\n'
+PROMPT+="%(?:%{$fg_bold[green]%}%1{➜%} :%{$fg_bold[red]%}%1{➜%} ) %{$reset_color%}"
+PROMPT+='$(git_prompt_info)'
+ZSH_THEME_GIT_PROMPT_PREFIX="%{$fg_bold[blue]%}(%{$fg[red]%}"
