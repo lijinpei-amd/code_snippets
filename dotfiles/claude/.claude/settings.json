@@ -1,0 +1,12 @@
+{
+  "env": {
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "ANTHROPIC_MODEL": "opus[1m]",
+    "CLAUDE_CODE_EFFORT_LEVEL": "max"
+  },
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  },
+  "skipDangerousModePermissionPrompt": true,
+  "theme": "auto"
+}

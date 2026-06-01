@@ -1,0 +1,9 @@
+# The global core.excludesfile (~/.gitignore) ignores ".claude/" and ".codex",
+# which would also hide the literal-dotted-dir stow packages below. Re-include
+# just those paths so they can be tracked here. (We can't use stow's --dotfiles
+# "dot-claude" naming to dodge the rule: GNU Stow 2.3.1's --dotfiles fails to
+# descend into an existing target dir like ~/.claude or ~/.codex.)
+!dotfiles/claude/.claude/
+!dotfiles/claude/.claude/**
+!dotfiles/codex/.codex/
+!dotfiles/codex/.codex/**

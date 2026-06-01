@@ -4,9 +4,15 @@ set -euo pipefail
 STOW_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dotfiles"
 
 # stow_pkg PACKAGE
-# Symlink the files in dotfiles/PACKAGE/ into $HOME. Any pre-existing real
-# (non-symlink) file at a target path is moved aside to <path>.bak-<timestamp>
-# first, so both first-time runs and re-runs are idempotent. --no-folding keeps
+# Symlink the files in dotfiles/PACKAGE/ into $HOME. The packages use stow's
+# --dotfiles convention: a "dot-" prefix is rewritten to a leading "." at the
+# target (e.g. dot-bashrc_stow -> ~/.bashrc_stow). Note this prefix is only
+# used for top-level dotfiles; directory-based packages keep a literal dotted
+# dir name (nvim/.config/..., codex/.codex/..., claude/.claude/...) because GNU Stow 2.3.1's
+# --dotfiles mistranslates a "dot-" directory when it must descend into an
+# already-existing target dir. Any pre-existing real (non-symlink) file at a
+# target path is moved aside to <path>.bak-<timestamp> first, so both first-time
+# runs and re-runs are idempotent. --no-folding keeps
 # stow from symlinking entire directories like ~/.config (which would capture
 # other tools' configs); only individual files become symlinks.
 stow_pkg() {
@@ -16,14 +22,17 @@ stow_pkg() {
     local ts
     ts=$(date +%Y%m%d-%H%M%S)
     while IFS= read -r -d '' f; do
-        local rel="${f#$pkg_dir/}"
-        local target="$HOME/$rel"
+        local rel="${f#"$pkg_dir"/}"
+        # Mirror stow's --dotfiles rewrite (leading "dot-" and any "/dot-"
+        # component -> ".") to find the real target path.
+        local link_rel="${rel/#dot-/.}"
+        local target="$HOME/${link_rel//\/dot-//.}"
         if [ -e "$target" ] && [ ! -L "$target" ]; then
             mv "$target" "$target.bak-$ts"
             echo "    backed up $target -> $target.bak-$ts"
         fi
     done < <(find "$pkg_dir" -type f -print0)
-    stow --dir="$STOW_DIR" --target="$HOME" --no-folding --restow "$pkg"
+    stow --dir="$STOW_DIR" --target="$HOME" --dotfiles --no-folding --restow "$pkg"
 }
 
 # json_patch FILE [JQ_ARGS...] — atomically apply a jq filter to a JSON file,
@@ -162,20 +171,11 @@ config_codex() { stow_pkg codex; }
 
 config_claude() {
     json_patch ~/.claude.json '.hasCompletedOnboarding = true'
-    local headers="Ocp-Apim-Subscription-Key: ${LLM_GATEWAY_KEY}
-user: ${USER}"
-    json_patch ~/.claude/settings.json --arg headers "$headers" '. * {
-      "env": {
-        "ANTHROPIC_BASE_URL": "https://llm-api.amd.com/Anthropic",
-        "ANTHROPIC_API_KEY": "dummy",
-        "ANTHROPIC_CUSTOM_HEADERS": $headers,
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-        "ANTHROPIC_MODEL": "opus[1m]",
-        "CLAUDE_CODE_EFFORT_LEVEL": "max"
-      },
-      "theme": "auto",
-      "skipDangerousModePermissionPrompt": true
-    }'
+    # The stowed settings.json deliberately omits the gateway endpoint and
+    # secret (ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY / ANTHROPIC_CUSTOM_HEADERS);
+    # those are provided out-of-band (e.g. exported from the personal ~/.env.sh)
+    # so no credential lands in the repo.
+    stow_pkg claude
 }
 
 install_gh() {
