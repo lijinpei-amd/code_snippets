@@ -1,0 +1,5 @@
+# ~/.zshenv_stow — source this from your own ~/.zshenv, the way ~/.zshrc
+# sources ~/.zshrc_stow. zsh reads ~/.zshenv on EVERY invocation (including
+# non-interactive scripts), so keep this to environment only; interactive bits
+# stay in ~/.zshrc. ~/.env.sh is the shared env layer (bash uses it too).
+source "$HOME/.env.sh"

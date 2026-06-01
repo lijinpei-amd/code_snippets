@@ -1,5 +1,5 @@
 unsetopt BEEP
-source $HOME/.env.sh
+# Environment (incl. ~/.env.sh) is loaded by ~/.zshenv for all shells.
 PROMPT="%(!.%{%F{yellow}%}.)$USER @ %{$fg[white]%}%M %{$fg[blue]%}%d"
 PROMPT+=$'\n'
 PROMPT+="%(?:%{$fg_bold[green]%}%1{➜%} :%{$fg_bold[red]%}%1{➜%} ) %{$reset_color%}"

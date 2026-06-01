@@ -109,8 +109,9 @@ install_zsh() {
     sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
 }
 
-# Stows ~/.zshrc_stow; the user is expected to `source ~/.zshrc_stow` from
-# their own ~/.zshrc. We don't touch ~/.zshrc itself.
+# Stows ~/.zshenv_stow (environment for all shells) and ~/.zshrc_stow
+# (interactive prompt); the user is expected to source each from their own
+# ~/.zshenv and ~/.zshrc. We don't touch ~/.zshenv or ~/.zshrc themselves.
 config_zsh() {
     stow_pkg zsh
     sudo usermod -s "$(which zsh)" "$(id -un)"
