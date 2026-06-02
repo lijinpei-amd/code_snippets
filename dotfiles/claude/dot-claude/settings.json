@@ -8,5 +8,5 @@
     "defaultMode": "bypassPermissions"
   },
   "skipDangerousModePermissionPrompt": true,
-  "theme": "auto"
+  "model": "opus[1m]"
 }

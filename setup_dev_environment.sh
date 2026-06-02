@@ -1,24 +1,53 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-STOW_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dotfiles"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+STOW_DIR="$SCRIPT_DIR/dotfiles"
+# The "dot-" directory convention (dot-config, dot-claude, ...) needs GNU Stow
+# >= 2.4.0: 2.3.1's --dotfiles mistranslates a "dot-" prefixed *directory* under
+# --no-folding. install_base builds 2.4.x into ~/proot/stow (see build_stow.sh);
+# resolve_stow() prefers that build but accepts any new-enough stow on PATH, so
+# --config-only works on hosts that already have a suitable stow.
+STOW_BIN="$HOME/proot/stow/bin/stow"
+
+# stow_at_least_24 BIN — true if BIN is a stow with version >= 2.4.0.
+stow_at_least_24() {
+    local v major minor
+    v=$("$1" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1) || return 1
+    [ -n "$v" ] || return 1
+    major=${v%%.*}; minor=${v#*.}; minor=${minor%%.*}
+    [ "$major" -gt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -ge 4 ]; }
+}
+
+# resolve_stow — point STOW_BIN at a usable (>= 2.4.0) stow, or fail clearly.
+# Prefers ~/proot/stow, then falls back to a new-enough stow on PATH.
+resolve_stow() {
+    if [ -x "$STOW_BIN" ] && stow_at_least_24 "$STOW_BIN"; then return 0; fi
+    local path_stow
+    path_stow=$(command -v stow 2>/dev/null || true)
+    if [ -n "$path_stow" ] && stow_at_least_24 "$path_stow"; then
+        STOW_BIN="$path_stow"; return 0
+    fi
+    echo "error: GNU Stow >= 2.4.0 not found (needed for --dotfiles directory packages);" >&2
+    echo "       run $SCRIPT_DIR/build_stow.sh to build it into ~/proot/stow" >&2
+    return 1
+}
 
 # stow_pkg PACKAGE
-# Symlink the files in dotfiles/PACKAGE/ into $HOME. The packages use stow's
-# --dotfiles convention: a "dot-" prefix is rewritten to a leading "." at the
-# target (e.g. dot-bashrc_stow -> ~/.bashrc_stow). Note this prefix is only
-# used for top-level dotfiles; directory-based packages keep a literal dotted
-# dir name (nvim/.config/..., codex/.codex/..., claude/.claude/...) because GNU Stow 2.3.1's
-# --dotfiles mistranslates a "dot-" directory when it must descend into an
-# already-existing target dir. Any pre-existing real (non-symlink) file at a
-# target path is moved aside to <path>.bak-<timestamp> first, so both first-time
-# runs and re-runs are idempotent. --no-folding keeps
+# Symlink the files in dotfiles/PACKAGE/ into $HOME. Every package uses stow's
+# --dotfiles convention: a "dot-" prefix on a file OR directory is rewritten to
+# a leading "." at the target (dot-bashrc_stow -> ~/.bashrc_stow,
+# dot-config/nvim/... -> ~/.config/nvim/..., dot-claude/... -> ~/.claude/...).
+# This requires GNU Stow >= 2.4.0 (provided via ~/proot/stow). Any pre-existing
+# real (non-symlink) file at a target path is moved aside to <path>.bak-<timestamp>
+# first, so both first-time runs and re-runs are idempotent. --no-folding keeps
 # stow from symlinking entire directories like ~/.config (which would capture
 # other tools' configs); only individual files become symlinks.
 stow_pkg() {
     local pkg="$1"
     local pkg_dir="$STOW_DIR/$pkg"
     [ -d "$pkg_dir" ] || { echo "error: missing stow package $pkg_dir" >&2; exit 1; }
+    resolve_stow || exit 1
     local ts
     ts=$(date +%Y%m%d-%H%M%S)
     while IFS= read -r -d '' f; do
@@ -32,7 +61,7 @@ stow_pkg() {
             echo "    backed up $target -> $target.bak-$ts"
         fi
     done < <(find "$pkg_dir" -type f -print0)
-    stow --dir="$STOW_DIR" --target="$HOME" --dotfiles --no-folding --restow "$pkg"
+    "$STOW_BIN" --dir="$STOW_DIR" --target="$HOME" --dotfiles --no-folding --restow "$pkg"
 }
 
 # json_patch FILE [JQ_ARGS...] — atomically apply a jq filter to a JSON file,
@@ -98,7 +127,12 @@ pkg_install() {
 ALL_COMPONENTS=(base zsh env bash inputrc tmux nvim git llvm node codex claude gh uv hf)
 
 install_base() {
-    pkg_install zsh git curl python3-neovim silversearcher-ag wget tmux jq ccache stow
+    # make + perl are build deps for stow (GNU Stow is a Perl program).
+    pkg_install zsh git curl python3-neovim silversearcher-ag wget tmux jq ccache make perl
+    # Build GNU Stow >= 2.4.0 into ~/proot/stow; the distro package is 2.3.1,
+    # which mistranslates "dot-" prefixed directories under --dotfiles --no-folding.
+    # build_stow.sh is idempotent (no-op if the right version is already installed).
+    "$SCRIPT_DIR/build_stow.sh"
 }
 
 install_zsh() {
