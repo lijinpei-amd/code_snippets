@@ -7,7 +7,6 @@
   "permissions": {
     "defaultMode": "bypassPermissions"
   },
-  "skipDangerousModePermissionPrompt": true,
   "model": "opus[1m]",
   "hooks": {
     "PreToolUse": [
@@ -21,5 +20,6 @@
         ]
       }
     ]
-  }
+  },
+  "skipDangerousModePermissionPrompt": true
 }
