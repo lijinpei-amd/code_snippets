@@ -37,3 +37,8 @@ CMAKE_ARGS=(
 cmake "${CMAKE_ARGS[@]}"
 cmake --build "$LLVM_BUILD_PATH"
 cmake --install "$LLVM_BUILD_PATH"
+
+cat > "$LLVM_PROJECT_PATH/.clangd" <<EOF
+CompileFlags:
+  CompilationDatabase: $LLVM_BUILD_PATH
+EOF
