@@ -42,3 +42,14 @@ cat > "$LLVM_PROJECT_PATH/.clangd" <<EOF
 CompileFlags:
   CompilationDatabase: $LLVM_BUILD_PATH
 EOF
+
+# Project-scoped Claude config: keep the Co-Authored-By / "Generated with
+# Claude Code" trailer out of commits made from this LLVM worktree, without
+# touching the global ~/.claude settings. settings.local.json is the personal,
+# git-excluded tier, so it can't accidentally land in an LLVM commit.
+mkdir -p "$LLVM_PROJECT_PATH/.claude"
+cat > "$LLVM_PROJECT_PATH/.claude/settings.local.json" <<EOF
+{
+  "includeCoAuthoredBy": false
+}
+EOF
