@@ -116,21 +116,51 @@ def activate_venv(venv_path):
     os.environ["VIRTUAL_ENV"] = str(venv_path)
 
 
+def registered_worktree_paths(repo):
+    """Resolved paths of every worktree currently registered for repo.
+
+    Includes worktrees whose directory was deleted out-of-band (git reports
+    them as "prunable"). Matching by path lets us target a specific worktree
+    without guessing the .git/worktrees/<name> metadata dir, which git
+    disambiguates with numeric suffixes when basenames collide across
+    workspaces (e.g. aiter, aiter1, aiter3 for three workspaces).
+    """
+    result = subprocess.run(
+        ["git", "-C", str(repo), "worktree", "list", "--porcelain"],
+        capture_output=True, text=True, check=False,
+    )
+    paths = set()
+    for line in result.stdout.splitlines():
+        if line.startswith("worktree "):
+            paths.add(Path(line[len("worktree "):]).resolve())
+    return paths
+
+
 def remove_worktrees(workspace, repos):
     for repo in repos:
-        repo_name = repo.name
-        worktree_path = workspace / repo_name
+        worktree_path = workspace / repo.name
 
-        if worktree_path.is_dir():
-            print(f"Removing worktree {worktree_path}...")
-            subprocess.run(
-                ["git", "-C", str(repo), "worktree", "remove", "--force", str(worktree_path)],
-                check=False,
+        # Only act on a worktree this repo actually has registered at our path.
+        # Skipping unregistered paths avoids misleading "Removing..." output and
+        # keeps a genuine removal failure (below) distinguishable from a no-op.
+        if worktree_path.resolve() not in registered_worktree_paths(repo):
+            continue
+
+        print(f"Removing worktree {worktree_path}...")
+        # Double --force removes the worktree even if it is locked or dirty; for
+        # a registration whose directory was deleted out-of-band, git drops the
+        # stale entry too. We target by path and deliberately avoid the
+        # repo-wide `worktree prune`, which would also drop other workspaces'
+        # registrations if their directories happened to be transiently absent.
+        result = subprocess.run(
+            ["git", "-C", str(repo), "worktree", "remove", "--force", "--force", str(worktree_path)],
+            check=False, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            print(
+                f"Warning: failed to remove worktree {worktree_path}: {result.stderr.strip()}",
+                file=sys.stderr,
             )
-
-        # Drop stale registration if the worktree dir was deleted out-of-band.
-        worktree_meta = repo / ".git" / "worktrees" / repo_name
-        shutil.rmtree(worktree_meta, ignore_errors=True)
 
 
 def add_worktree(workspace, repo):
