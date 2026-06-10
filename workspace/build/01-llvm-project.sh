@@ -16,10 +16,8 @@ LLVM_BUILD_PATH="$LLVM_PROJECT_PATH/build"
 
 LLVM_BUILD_TYPE=Debug
 
-#LLVM_PROJECTS="mlir;llvm;lld;clang"
-LLVM_PROJECTS="llvm"
+LLVM_PROJECTS="mlir;llvm;lld;clang"
 LLVM_TARGETS="all"
-LLVM_LINK_LLVM_DYLIB=${LLVM_LINK_LLVM_DYLIB:-ON}
 LLVM_DEFAULT_TARGET_TRIPLE=${LLVM_DEFAULT_TARGET_TRIPLE:-x86_64-unknown-linux-gnu}
 
 CMAKE_ARGS=(
@@ -39,7 +37,18 @@ CMAKE_ARGS=(
     -DLLVM_DEFAULT_TARGET_TRIPLE="$LLVM_DEFAULT_TARGET_TRIPLE"
     -DCMAKE_EXPORT_COMPILE_COMMANDS=1
     -DLLVM_ENABLE_PROJECTS="$LLVM_PROJECTS"
-    -DLLVM_LINK_LLVM_DYLIB="$LLVM_LINK_LLVM_DYLIB"
+    # BUILD_SHARED_LIBS: each component is its own .so, so editing one file
+    # relinks one small lib instead of a giant dylib/static tools. Mutually
+    # exclusive with LLVM_LINK_LLVM_DYLIB (llvm/CMakeLists.txt FATAL_ERRORs if
+    # both are set), so the dylib option is dropped in favour of this.
+    -DBUILD_SHARED_LIBS=ON
+    # Trim the build graph: skip examples/benchmarks/docs we never use.
+    -DLLVM_INCLUDE_EXAMPLES=OFF
+    -DLLVM_INCLUDE_BENCHMARKS=OFF
+    -DLLVM_INCLUDE_DOCS=OFF
+    # Don't embed the git revision: avoids relinking tools every time HEAD
+    # changes when switching commits across worktrees.
+    -DLLVM_APPEND_VC_REV=OFF
     # Emit directory-neutral debug/__FILE__ paths so ccache can reuse the .o
     # across worktrees. Source root -> /llvm-project/ (trailing slash is
     # required: the cmake rule maps "${source_root}/" so a bare "/llvm-project"
