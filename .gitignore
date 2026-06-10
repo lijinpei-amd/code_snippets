@@ -7,3 +7,7 @@
 !dotfiles/claude/.claude/**
 !dotfiles/codex/.codex/
 !dotfiles/codex/.codex/**
+
+# Python bytecode caches (e.g. workspace/__pycache__ from the build helpers).
+__pycache__/
+*.py[cod]
