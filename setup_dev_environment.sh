@@ -124,11 +124,11 @@ pkg_install() {
 # Components: install_<name> and/or config_<name>
 # ---------------------------------------------------------------------------
 
-ALL_COMPONENTS=(base zsh env bash inputrc tmux nvim git llvm node codex claude gh uv hf)
+ALL_COMPONENTS=(base zsh env bash inputrc tmux nvim git llvm ccache gdb node codex claude gh uv hf)
 
 install_base() {
     # make + perl are build deps for stow (GNU Stow is a Perl program).
-    pkg_install zsh git curl python3-neovim silversearcher-ag wget tmux jq ccache make perl
+    pkg_install zsh git curl python3-neovim silversearcher-ag wget tmux jq ccache gdb make perl
     # Build GNU Stow >= 2.4.0 into ~/proot/stow; the distro package is 2.3.1,
     # which mistranslates "dot-" prefixed directories under --dotfiles --no-folding.
     # build_stow.sh is idempotent (no-op if the right version is already installed).
@@ -191,6 +191,14 @@ install_llvm() {
             ;;
     esac
 }
+
+# Cross-worktree ccache config (base_dir / hash_dir / sloppiness). ccache itself
+# is installed in install_base; this only stows ~/.config/ccache/ccache.conf.
+config_ccache() { stow_pkg ccache; }
+
+# Global gdbinit that maps the /llvm-project build sentinel back to whichever
+# worktree a binary lives in (companion to LLVM_USE_RELATIVE_PATHS_IN_FILES).
+config_gdb() { stow_pkg gdb; }
 
 install_node() {
     wget -qO- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash

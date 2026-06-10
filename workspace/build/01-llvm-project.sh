@@ -1,13 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ $# -lt 1 ]; then
+    echo "usage: $(basename "$0") <llvm-project-path>" >&2
+    echo "  builds into <llvm-project-path>/build (in-tree, required for" >&2
+    echo "  cross-worktree ccache sharing — see ccache.conf base_dir)" >&2
+    exit 2
+fi
+
 LLVM_PROJECT_PATH="$1"
-LLVM_BUILD_PATH="$2"
-LLVM_INSTALL_PATH="$3"
+# Build in-tree at <worktree>/build. Keeping the build dir inside the worktree
+# is what makes ccache's base_dir cancel the workspace/NN prefix, so identical
+# sources hit across worktrees instead of each worktree being its own silo.
+LLVM_BUILD_PATH="$LLVM_PROJECT_PATH/build"
 
 LLVM_BUILD_TYPE=Debug
 
-LLVM_PROJECTS="mlir;llvm;lld;clang"
+#LLVM_PROJECTS="mlir;llvm;lld;clang"
+LLVM_PROJECTS="llvm"
 LLVM_TARGETS="all"
 LLVM_LINK_LLVM_DYLIB=${LLVM_LINK_LLVM_DYLIB:-ON}
 LLVM_DEFAULT_TARGET_TRIPLE=${LLVM_DEFAULT_TARGET_TRIPLE:-x86_64-unknown-linux-gnu}
@@ -29,14 +39,18 @@ CMAKE_ARGS=(
     -DLLVM_DEFAULT_TARGET_TRIPLE="$LLVM_DEFAULT_TARGET_TRIPLE"
     -DCMAKE_EXPORT_COMPILE_COMMANDS=1
     -DLLVM_ENABLE_PROJECTS="$LLVM_PROJECTS"
-    -DCMAKE_INSTALL_PREFIX="$LLVM_INSTALL_PATH"
     -DLLVM_LINK_LLVM_DYLIB="$LLVM_LINK_LLVM_DYLIB"
+    # Emit directory-neutral debug/__FILE__ paths so ccache can reuse the .o
+    # across worktrees. Source root -> /llvm-project/ (trailing slash is
+    # required: the cmake rule maps "${source_root}/" so a bare "/llvm-project"
+    # would yield "/llvm-projectllvm/..."). ~/.config/gdb/gdbinit reverses this.
+    -DLLVM_USE_RELATIVE_PATHS_IN_FILES=ON
+    -DLLVM_SOURCE_PREFIX=/llvm-project/
     -B"$LLVM_BUILD_PATH" "$LLVM_PROJECT_PATH/llvm"
 )
 
 cmake "${CMAKE_ARGS[@]}"
 cmake --build "$LLVM_BUILD_PATH"
-cmake --install "$LLVM_BUILD_PATH"
 
 cat > "$LLVM_PROJECT_PATH/.clangd" <<EOF
 CompileFlags:

@@ -1,0 +1,48 @@
+# GDB global config — managed by stow (dotfiles/gdb).
+#
+# The LLVM worktrees are built with -ffile-prefix-map so debug info is
+# directory-neutral (LLVM_USE_RELATIVE_PATHS_IN_FILES=ON,
+# LLVM_SOURCE_PREFIX=/llvm-project/ in 01-llvm-project.sh). That lets ccache
+# reuse a single .o across every worktree, but it also means the source and
+# build paths baked into the binary read as:
+#
+#     /llvm-project/llvm/lib/.../Foo.cpp      (source)
+#     /llvm-project/build/.../Foo.inc         (generated, in-tree build dir)
+#
+# instead of the real workspace/NN/llvm-project path. This hook rewrites that
+# /llvm-project sentinel back to whichever worktree the loaded binary actually
+# lives in, so `list`, breakpoints and stepping find the right files no matter
+# which worktree — or which cwd — you debug from. One global file covers all
+# worktrees; nothing per-worktree to maintain.
+#
+# Worktree root is detected from the binary's own path (the directory named
+# "llvm-project"), so debugging workspace/07's opt maps /llvm-project ->
+# .../workspace/07/llvm-project automatically.
+
+# Trust auto-load scripts (pretty-printers, *-gdb.py) shipped under the dev tree.
+add-auto-load-safe-path /mnt/nvme2/jinpli/workspace/home/jinpli/development
+
+python
+import gdb, os
+
+def _llvm_substitute_path(event):
+    objfile = getattr(event, "new_objfile", None)
+    fname = getattr(objfile, "filename", None) if objfile else None
+    if not fname:
+        return
+    p = os.path.realpath(fname)
+    # Walk up to the worktree root (the directory named "llvm-project").
+    while p != "/" and os.path.basename(p) != "llvm-project":
+        p = os.path.dirname(p)
+    if os.path.basename(p) != "llvm-project":
+        return
+    # Re-point the build-time sentinel at this worktree. Drop any stale rule
+    # first so loading a second worktree's binary in one session re-maps cleanly.
+    try:
+        gdb.execute("unset substitute-path /llvm-project", to_string=True)
+    except gdb.error:
+        pass
+    gdb.execute("set substitute-path /llvm-project %s" % p, to_string=True)
+
+gdb.events.new_objfile.connect(_llvm_substitute_path)
+end
