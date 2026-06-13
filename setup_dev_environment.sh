@@ -148,7 +148,7 @@ install_zsh() {
 # ~/.zshenv and ~/.zshrc. We don't touch ~/.zshenv or ~/.zshrc themselves.
 config_zsh() {
     stow_pkg zsh
-    sudo usermod -s "$(which zsh)" "$(id -un)"
+    sudo usermod -s "$(command -v zsh)" "$(id -un)"
 }
 
 config_env()     { stow_pkg env; }
