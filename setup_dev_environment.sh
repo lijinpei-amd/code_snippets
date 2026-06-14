@@ -124,7 +124,7 @@ pkg_install() {
 # Components: install_<name> and/or config_<name>
 # ---------------------------------------------------------------------------
 
-ALL_COMPONENTS=(base zsh env bash inputrc tmux nvim git llvm ccache gdb node codex claude gh uv hf)
+ALL_COMPONENTS=(base zsh env bash inputrc tmux nvim git llvm rocq ccache gdb node codex claude gh uv hf)
 
 install_base() {
     # make + perl are build deps for stow (GNU Stow is a Perl program).
@@ -191,6 +191,13 @@ install_llvm() {
             ;;
     esac
 }
+
+# Rocq prover (formerly Coq), for the Software Foundations volumes. build_rocq.sh
+# compiles Rocq 9.0.x + coq-simple-io into its own opam root at ~/proot/rocq and
+# is idempotent (no-op if already built). The env vars (OPAMROOT, switch PATH,
+# OCaml runtime paths) are managed by the `env` component via
+# dotfiles/env/dot-env_stow.sh, so there is no separate config_rocq.
+install_rocq() { "$SCRIPT_DIR/build_rocq.sh"; }
 
 # Cross-worktree ccache config (base_dir / hash_dir / sloppiness). ccache itself
 # is installed in install_base; this only stows ~/.config/ccache/ccache.conf.
