@@ -154,7 +154,42 @@ config_zsh() {
 config_env()     { stow_pkg env; }
 config_bash()    { stow_pkg bash; }
 config_inputrc() { stow_pkg inputrc; }
-config_tmux()    { stow_pkg tmux; }
+
+# tpm (Tmux Plugin Manager) is to tmux what vim-plug is to nvim: install_tmux
+# bootstraps the manager, config_tmux stows the conf and installs the @plugin
+# entries it declares. dot-tmux.conf's final `run` line loads tpm at tmux
+# startup, so without tpm that line fails with 127. install runs before config,
+# so the clone also creates the real ~/.tmux directory that stow_pkg then links
+# name-session.sh into. Idempotent: re-runs fast-forward instead of re-cloning.
+install_tmux() {
+    local tpm_dir="$HOME/.tmux/plugins/tpm"
+    if [ -d "$tpm_dir/.git" ]; then
+        git -C "$tpm_dir" pull --ff-only
+    else
+        # Clear any leftover non-repo directory (e.g. an interrupted clone)
+        # first: `git clone` aborts with "destination already exists" into a
+        # non-empty dir, which would wedge every re-run under `set -e`. rm -rf is
+        # a no-op when the path does not exist.
+        rm -rf "$tpm_dir"
+        git clone --depth 1 https://github.com/tmux-plugins/tpm "$tpm_dir"
+    fi
+}
+
+config_tmux() {
+    stow_pkg tmux
+    # Install the @plugin entries non-interactively (tpm's CLI installer; the
+    # interactive equivalent is prefix + I). Mirrors config_nvim's PlugInstall.
+    # install_plugins reads TMUX_PLUGIN_MANAGER_PATH from the tmux *environment*,
+    # which tpm only sets once the conf's `run tpm` line has executed -- so load
+    # the conf in a server first (start-server is a no-op if one is running).
+    local tpm_install="$HOME/.tmux/plugins/tpm/bin/install_plugins"
+    if [ -x "$tpm_install" ] && command -v tmux >/dev/null 2>&1; then
+        tmux start-server \; source-file "$HOME/.tmux.conf"
+        "$tpm_install"
+    else
+        echo "    (skipping tpm plugin install: tpm or tmux not installed)" >&2
+    fi
+}
 
 install_nvim() {
     sh -c 'curl -fLo "${XDG_DATA_HOME:-$HOME/.local/share}"/nvim/site/autoload/plug.vim --create-dirs \
