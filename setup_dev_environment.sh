@@ -128,7 +128,9 @@ ALL_COMPONENTS=(base zsh env bash inputrc tmux nvim git llvm rocq ccache gdb nod
 
 install_base() {
     # make + perl are build deps for stow (GNU Stow is a Perl program).
-    pkg_install zsh git curl python3-neovim silversearcher-ag wget tmux jq ccache gdb make perl
+    # unzip is required by opam (driven by build_rocq.sh) to unpack source
+    # archives; opam aborts with "Missing dependencies ... unzip" without it.
+    pkg_install zsh git curl python3-neovim silversearcher-ag wget tmux jq ccache gdb make perl unzip
     # Build GNU Stow >= 2.4.0 into ~/proot/stow; the distro package is 2.3.1,
     # which mistranslates "dot-" prefixed directories under --dotfiles --no-folding.
     # build_stow.sh is idempotent (no-op if the right version is already installed).

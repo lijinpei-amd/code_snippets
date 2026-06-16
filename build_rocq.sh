@@ -43,6 +43,20 @@ if [ -x "$COQC" ] && "$COQC" --version 2>/dev/null | grep -qE "version ${ROCQ_VE
     exit 0
 fi
 
+# opam (invoked by the platform script below) refuses to operate without unzip,
+# which it uses to unpack source archives -- it aborts with
+#   [ERROR] Missing dependencies -- the following commands are required ...: unzip
+# before reaching the platform script's own `sudo apt install` of prerequisites.
+# setup_dev_environment.sh's install_base normally provides it, but ensure it
+# here too so this script stands alone on a fresh machine.
+if ! command -v unzip >/dev/null 2>&1; then
+    echo "==> Installing unzip (required by opam)..."
+    if   command -v apt-get >/dev/null 2>&1; then sudo apt-get install -y unzip
+    elif command -v pacman  >/dev/null 2>&1; then sudo pacman -S --needed --noconfirm unzip
+    else echo "error: cannot install unzip: no apt-get or pacman found" >&2; exit 1
+    fi
+fi
+
 # -jobs is capped at 16 by the platform script's argument validator.
 JOBS=$(nproc); [ "$JOBS" -gt 16 ] && JOBS=16
 
