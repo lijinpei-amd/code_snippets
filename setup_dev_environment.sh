@@ -124,13 +124,21 @@ pkg_install() {
 # Components: install_<name> and/or config_<name>
 # ---------------------------------------------------------------------------
 
-ALL_COMPONENTS=(base zsh env bash inputrc tmux nvim git llvm rocq ccache gdb node codex claude gh uv hf)
+# DEFAULT_COMPONENTS run on a plain (no --components) invocation.
+DEFAULT_COMPONENTS=(base zsh env bash inputrc tmux nvim git llvm ccache gdb node codex claude gh uv hf)
+# OPT_IN_COMPONENTS are recognised by --components but excluded from the default
+# run. rocq builds a dedicated opam + OCaml + Rocq/Coq toolchain (~10-40 min,
+# heavy) needed only for the Software Foundations volumes, so it must be asked
+# for explicitly: setup_dev_environment.sh --components rocq
+OPT_IN_COMPONENTS=(rocq)
+# Full set of valid component names (default + opt-in); used for validation and
+# --list-components.
+ALL_COMPONENTS=("${DEFAULT_COMPONENTS[@]}" "${OPT_IN_COMPONENTS[@]}")
 
 install_base() {
     # make + perl are build deps for stow (GNU Stow is a Perl program).
-    # unzip is required by opam (driven by build_rocq.sh) to unpack source
-    # archives; opam aborts with "Missing dependencies ... unzip" without it.
-    pkg_install zsh git curl python3-neovim silversearcher-ag wget tmux jq ccache gdb make perl unzip
+    # (opam's unzip dependency lives in build_rocq.sh, which is opt-in.)
+    pkg_install zsh git curl python3-neovim silversearcher-ag wget tmux jq ccache gdb make perl
     # Build GNU Stow >= 2.4.0 into ~/proot/stow; the distro package is 2.3.1,
     # which mistranslates "dot-" prefixed directories under --dotfiles --no-folding.
     # build_stow.sh is idempotent (no-op if the right version is already installed).
@@ -312,25 +320,30 @@ Usage: $(basename "$0") [OPTIONS]
   --config-only          Skip install steps; run only config steps.
   --install-only         Skip config steps; run only install steps.
   --components LIST      Comma-separated component names to act on.
-                         Default: all components.
+                         Default: all default components (opt-in ones excluded).
   --list-components      Print available components and exit.
   -h, --help             Show this help.
 
 --config-only and --install-only are mutually exclusive.
 --components is independent: it narrows which components run, in either mode.
 
-Available components:
-  ${ALL_COMPONENTS[*]}
+Default components:
+  ${DEFAULT_COMPONENTS[*]}
+Opt-in components (run only when named with --components):
+  ${OPT_IN_COMPONENTS[*]}
 EOF
 }
 
 list_components() {
-    local c
+    local c optin
+    declare -A optin=()
+    for c in "${OPT_IN_COMPONENTS[@]}"; do optin[$c]=1; done
     for c in "${ALL_COMPONENTS[@]}"; do
-        local has_install=no has_config=no
+        local has_install=no has_config=no tag=""
         has_fn "install_$c" && has_install=yes
         has_fn  "config_$c" && has_config=yes
-        printf '  %-10s  install=%-3s  config=%-3s\n' "$c" "$has_install" "$has_config"
+        [ -n "${optin[$c]:-}" ] && tag="  (opt-in)"
+        printf '  %-10s  install=%-3s  config=%-3s%s\n' "$c" "$has_install" "$has_config" "$tag"
     done
 }
 
@@ -400,7 +413,9 @@ main() {
 
     local selected
     if [ "${#COMPONENTS[@]}" -eq 0 ]; then
-        selected=("${ALL_COMPONENTS[@]}")
+        # Opt-in components (e.g. rocq) are deliberately excluded here; request
+        # them explicitly with --components.
+        selected=("${DEFAULT_COMPONENTS[@]}")
     else
         selected=("${COMPONENTS[@]}")
     fi
