@@ -1,5 +1,12 @@
 model_provider = "amd_llm"
 personality = "pragmatic"
+
+# Lifecycle hooks (~/.codex/hooks.json) are Stable and default-on in current
+# Codex, but enable explicitly so the publish guard still loads if a pinned or
+# older build leaves the feature off.
+[features]
+hooks = true
+
 [model_providers.amd_llm]
 name = "amd_llm"
 base_url = "https://llm-api.amd.com/OpenAI/"
