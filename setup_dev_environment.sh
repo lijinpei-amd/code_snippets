@@ -125,7 +125,7 @@ pkg_install() {
 # ---------------------------------------------------------------------------
 
 # DEFAULT_COMPONENTS run on a plain (no --components) invocation.
-DEFAULT_COMPONENTS=(base zsh env bash inputrc tmux nvim git llvm ccache gdb node codex claude gh uv hf)
+DEFAULT_COMPONENTS=(base zsh env bash inputrc tmux nvim git llvm ccache gdb node codex claude gh uv precommit hf)
 # OPT_IN_COMPONENTS are recognised by --components but excluded from the default
 # run. rocq builds a dedicated opam + OCaml + Rocq/Coq toolchain (~10-40 min,
 # heavy) needed only for the Software Foundations volumes, so it must be asked
@@ -297,6 +297,71 @@ install_gh() {
 
 install_uv() {
     curl -LsSf https://astral.sh/uv/install.sh | sh
+}
+
+ensure_uv() {
+    export PATH="$HOME/.local/bin:$PATH"
+    if ! command -v uv >/dev/null 2>&1; then
+        install_uv
+        export PATH="$HOME/.local/bin:$PATH"
+    fi
+}
+
+install_tar_binary() {
+    local name="$1" url="$2"
+    local tmp
+    tmp=$(mktemp -d)
+    curl -fsSL "$url" -o "$tmp/archive.tar.gz"
+    tar -xzf "$tmp/archive.tar.gz" -C "$tmp"
+    mkdir -p "$HOME/.local/bin"
+    install -m 0755 "$tmp/$name" "$HOME/.local/bin/$name"
+    rm -rf "$tmp"
+}
+
+install_precommit() {
+    ensure_uv
+    uv tool install pre-commit
+    uv tool install detect-secrets
+
+    local os arch gitleaks_platform trufflehog_platform
+    os=$(uname -s)
+    arch=$(uname -m)
+    if [ "$os" != Linux ]; then
+        echo "error: precommit binary install currently supports Linux only, got $os" >&2
+        return 1
+    fi
+    case "$arch" in
+        x86_64|amd64)
+            gitleaks_platform=linux_x64
+            trufflehog_platform=linux_amd64
+            ;;
+        aarch64|arm64)
+            gitleaks_platform=linux_arm64
+            trufflehog_platform=linux_arm64
+            ;;
+        *)
+            echo "error: unsupported architecture for precommit tools: $arch" >&2
+            return 1
+            ;;
+    esac
+
+    local gitleaks_version=8.30.1
+    local trufflehog_version=3.95.6
+    install_tar_binary \
+        gitleaks \
+        "https://github.com/gitleaks/gitleaks/releases/download/v${gitleaks_version}/gitleaks_${gitleaks_version}_${gitleaks_platform}.tar.gz"
+    install_tar_binary \
+        trufflehog \
+        "https://github.com/trufflesecurity/trufflehog/releases/download/v${trufflehog_version}/trufflehog_${trufflehog_version}_${trufflehog_platform}.tar.gz"
+}
+
+config_precommit() {
+    export PATH="$HOME/.local/bin:$PATH"
+    if [ -f "$SCRIPT_DIR/.pre-commit-config.yaml" ] && command -v pre-commit >/dev/null 2>&1; then
+        (cd "$SCRIPT_DIR" && pre-commit install)
+    else
+        echo "    (skipping pre-commit install: config or pre-commit not found)" >&2
+    fi
 }
 
 install_hf() {

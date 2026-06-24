@@ -186,7 +186,7 @@ def add_worktree(workspace, repo):
     return repo_name
 
 
-def setup_workspace(identifier, parent_dir, force=False):
+def setup_workspace(identifier, parent_dir, force=False, run_venv_setup=True):
     workspace = parent_dir / identifier
 
     ensure_repos()
@@ -212,11 +212,14 @@ def setup_workspace(identifier, parent_dir, force=False):
     run(["uv", "venv", "--system-site-packages", "--prompt", identifier, str(venv_path)])
     activate_venv(venv_path)
 
-    if SETUP_VENV_SCRIPT.exists():
-        print(f"Running {SETUP_VENV_SCRIPT}...")
-        run(["bash", str(SETUP_VENV_SCRIPT)])
+    if run_venv_setup:
+        if SETUP_VENV_SCRIPT.exists():
+            print(f"Running {SETUP_VENV_SCRIPT}...")
+            run(["bash", str(SETUP_VENV_SCRIPT)])
+        else:
+            print(f"Warning: {SETUP_VENV_SCRIPT} not found, skipping venv setup.", file=sys.stderr)
     else:
-        print(f"Warning: {SETUP_VENV_SCRIPT} not found, skipping venv setup.", file=sys.stderr)
+        print("Skipping venv setup script (--skip-venv-setup).")
 
     post_setup(workspace)
 
@@ -300,11 +303,21 @@ def main():
         action="store_true",
         help="Update an existing workspace: clone any new repos, add missing worktrees, and build them",
     )
+    parser.add_argument(
+        "--skip-venv-setup",
+        action="store_true",
+        help=f"Create the venv but skip running {SETUP_VENV_SCRIPT.name}",
+    )
     args = parser.parse_args()
     if args.update:
         update_workspace(args.identifier, args.base_dir)
     else:
-        setup_workspace(args.identifier, args.base_dir, force=args.force)
+        setup_workspace(
+            args.identifier,
+            args.base_dir,
+            force=args.force,
+            run_venv_setup=not args.skip_venv_setup,
+        )
 
 
 if __name__ == "__main__":
