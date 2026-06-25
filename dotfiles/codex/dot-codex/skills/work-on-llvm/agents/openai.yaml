@@ -1,0 +1,4 @@
+interface:
+  display_name: "Work on LLVM"
+  short_description: "LLVM issue, patch, test, and PR workflow"
+  default_prompt: "Use $work-on-llvm to investigate and fix this LLVM issue with focused tests and PR-ready hygiene."
