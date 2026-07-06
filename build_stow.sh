@@ -15,8 +15,8 @@
 set -euo pipefail
 
 STOW_VERSION="2.4.1"
-STOW_URL="https://ftp.gnu.org/gnu/stow/stow-${STOW_VERSION}.tar.gz"
-STOW_MIRROR_URL="https://ftpmirror.gnu.org/stow/stow-${STOW_VERSION}.tar.gz"
+STOW_URL="https://ftpmirror.gnu.org/stow/stow-${STOW_VERSION}.tar.gz"
+STOW_MIRROR_URL="https://ftp.gnu.org/gnu/stow/stow-${STOW_VERSION}.tar.gz"
 PREFIX="$HOME/proot/stow"
 
 # Already installed at the right version? Nothing to do (keeps re-runs of the

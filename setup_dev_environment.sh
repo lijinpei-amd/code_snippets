@@ -81,6 +81,7 @@ json_patch() {
 # ---------------------------------------------------------------------------
 
 DISTRO=
+APT_UPDATED=0
 
 detect_distro() {
     if [ -r /etc/os-release ]; then
@@ -103,11 +104,18 @@ detect_distro() {
 
 pkg_name() {
     case "$DISTRO:$1" in
-        arch:python3-neovim)    echo python-pynvim ;;
-        arch:silversearcher-ag) echo the_silver_searcher ;;
-        arch:gh)                echo github-cli ;;
-        *)                      echo "$1" ;;
+        arch:python3-neovim|arch:python3-pynvim) echo python-pynvim ;;
+        arch:silversearcher-ag)                   echo the_silver_searcher ;;
+        arch:gh)                                  echo github-cli ;;
+        debian:python3-neovim)                    echo python3-pynvim ;;
+        *)                                        echo "$1" ;;
     esac
+}
+
+apt_update_once() {
+    [ "$APT_UPDATED" -eq 1 ] && return 0
+    sudo apt-get update
+    APT_UPDATED=1
 }
 
 pkg_install() {
@@ -116,7 +124,10 @@ pkg_install() {
     for p in "$@"; do pkgs+=("$(pkg_name "$p")"); done
     case "$DISTRO" in
         arch)   sudo pacman -S --needed --noconfirm "${pkgs[@]}" ;;
-        debian) sudo apt-get install -y "${pkgs[@]}" ;;
+        debian)
+            apt_update_once
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkgs[@]}"
+            ;;
     esac
 }
 
@@ -138,7 +149,7 @@ ALL_COMPONENTS=("${DEFAULT_COMPONENTS[@]}" "${OPT_IN_COMPONENTS[@]}")
 install_base() {
     # make + perl are build deps for stow (GNU Stow is a Perl program).
     # (opam's unzip dependency lives in build_rocq.sh, which is opt-in.)
-    pkg_install zsh git curl python3-neovim silversearcher-ag wget tmux jq ccache gdb make perl
+    pkg_install zsh git curl ca-certificates python3-pynvim silversearcher-ag wget tmux jq ccache gdb make perl
     # Build GNU Stow >= 2.4.0 into ~/proot/stow; the distro package is 2.3.1,
     # which mistranslates "dot-" prefixed directories under --dotfiles --no-folding.
     # build_stow.sh is idempotent (no-op if the right version is already installed).
@@ -285,8 +296,7 @@ install_gh() {
             tmp=$(mktemp)
             sudo mkdir -p -m 755 /etc/apt/keyrings /etc/apt/sources.list.d
             wget -nv -O "$tmp" https://cli.github.com/packages/githubcli-archive-keyring.gpg
-            sudo tee "$keyring" >/dev/null < "$tmp"
-            sudo chmod go+r "$keyring"
+            sudo install -m 0644 "$tmp" "$keyring"
             echo "deb [arch=$(dpkg --print-architecture) signed-by=$keyring] https://cli.github.com/packages stable main" \
                 | sudo tee "$sources" >/dev/null
             sudo apt-get update
