@@ -83,6 +83,14 @@ json_patch() {
 DISTRO=
 APT_UPDATED=0
 
+as_root() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
+
 detect_distro() {
     if [ -r /etc/os-release ]; then
         # shellcheck disable=SC1091
@@ -107,14 +115,16 @@ pkg_name() {
         arch:python3-neovim|arch:python3-pynvim) echo python-pynvim ;;
         arch:silversearcher-ag)                   echo the_silver_searcher ;;
         arch:gh)                                  echo github-cli ;;
+        arch:usermod)                             echo shadow ;;
         debian:python3-neovim)                    echo python3-pynvim ;;
+        debian:usermod)                           echo passwd ;;
         *)                                        echo "$1" ;;
     esac
 }
 
 apt_update_once() {
     [ "$APT_UPDATED" -eq 1 ] && return 0
-    sudo apt-get update
+    as_root apt-get update
     APT_UPDATED=1
 }
 
@@ -123,10 +133,10 @@ pkg_install() {
     local p
     for p in "$@"; do pkgs+=("$(pkg_name "$p")"); done
     case "$DISTRO" in
-        arch)   sudo pacman -S --needed --noconfirm "${pkgs[@]}" ;;
+        arch)   as_root pacman -S --needed --noconfirm "${pkgs[@]}" ;;
         debian)
             apt_update_once
-            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkgs[@]}"
+            as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkgs[@]}"
             ;;
     esac
 }
@@ -149,7 +159,7 @@ ALL_COMPONENTS=("${DEFAULT_COMPONENTS[@]}" "${OPT_IN_COMPONENTS[@]}")
 install_base() {
     # make + perl are build deps for stow (GNU Stow is a Perl program).
     # (opam's unzip dependency lives in build_rocq.sh, which is opt-in.)
-    pkg_install zsh git curl ca-certificates python3-pynvim silversearcher-ag wget tmux jq ccache gdb make perl
+    pkg_install zsh git curl ca-certificates python3-pynvim silversearcher-ag wget tmux jq ccache gdb make perl sudo usermod
     # Build GNU Stow >= 2.4.0 into ~/proot/stow; the distro package is 2.3.1,
     # which mistranslates "dot-" prefixed directories under --dotfiles --no-folding.
     # build_stow.sh is idempotent (no-op if the right version is already installed).
@@ -169,7 +179,7 @@ install_zsh() {
 # ~/.zshenv and ~/.zshrc. We don't touch ~/.zshenv or ~/.zshrc themselves.
 config_zsh() {
     stow_pkg zsh
-    sudo usermod -s "$(command -v zsh)" "$(id -un)"
+    as_root usermod -s "$(command -v zsh)" "$(id -un)"
 }
 
 config_env()     { stow_pkg env; }
@@ -239,11 +249,11 @@ install_llvm() {
         arch)   pkg_install llvm clang lld ;;
         debian)
             local v=22
-            wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- "$v"
-            sudo update-alternatives --install /usr/bin/clang   clang   "/usr/bin/clang-$v"   100
-            sudo update-alternatives --install /usr/bin/clang++ clang++ "/usr/bin/clang++-$v" 100
-            sudo update-alternatives --set clang   "/usr/bin/clang-$v"
-            sudo update-alternatives --set clang++ "/usr/bin/clang++-$v"
+            wget -qO- https://apt.llvm.org/llvm.sh | as_root bash -s -- "$v"
+            as_root update-alternatives --install /usr/bin/clang   clang   "/usr/bin/clang-$v"   100
+            as_root update-alternatives --install /usr/bin/clang++ clang++ "/usr/bin/clang++-$v" 100
+            as_root update-alternatives --set clang   "/usr/bin/clang-$v"
+            as_root update-alternatives --set clang++ "/usr/bin/clang++-$v"
             ;;
     esac
 }
@@ -294,13 +304,13 @@ install_gh() {
             local sources=/etc/apt/sources.list.d/github-cli.list
             local tmp
             tmp=$(mktemp)
-            sudo mkdir -p -m 755 /etc/apt/keyrings /etc/apt/sources.list.d
+            as_root mkdir -p -m 755 /etc/apt/keyrings /etc/apt/sources.list.d
             wget -nv -O "$tmp" https://cli.github.com/packages/githubcli-archive-keyring.gpg
-            sudo install -m 0644 "$tmp" "$keyring"
+            as_root install -m 0644 "$tmp" "$keyring"
             echo "deb [arch=$(dpkg --print-architecture) signed-by=$keyring] https://cli.github.com/packages stable main" \
-                | sudo tee "$sources" >/dev/null
-            sudo apt-get update
-            sudo apt-get install -y gh
+                | as_root tee "$sources" >/dev/null
+            as_root apt-get update
+            as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y gh
             ;;
     esac
 }
