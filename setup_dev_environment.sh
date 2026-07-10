@@ -254,6 +254,14 @@ install_llvm() {
             as_root update-alternatives --install /usr/bin/clang++ clang++ "/usr/bin/clang++-$v" 100
             as_root update-alternatives --set clang   "/usr/bin/clang-$v"
             as_root update-alternatives --set clang++ "/usr/bin/clang++-$v"
+            # llvm.sh installs lld-$v but only as versioned binaries; clang's
+            # -fuse-ld=lld (set by our LLVM_ENABLE_LLD=ON build) searches PATH
+            # for an unversioned ld.lld, so wire that up too or linking fails
+            # with "invalid linker name in argument '-fuse-ld=lld'".
+            as_root update-alternatives --install /usr/bin/ld.lld ld.lld "/usr/bin/ld.lld-$v" 100
+            as_root update-alternatives --install /usr/bin/lld    lld    "/usr/bin/lld-$v"    100
+            as_root update-alternatives --set ld.lld "/usr/bin/ld.lld-$v"
+            as_root update-alternatives --set lld    "/usr/bin/lld-$v"
             ;;
     esac
 }
