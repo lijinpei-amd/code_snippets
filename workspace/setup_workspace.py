@@ -100,13 +100,22 @@ def clone_detached(url, target):
         run(["git", "-C", str(target), "branch", "-D", *local_branches])
 
 
-def discover_repos():
+def discover_repos(only_listed=False):
     if not REPOS_DIR.is_dir():
         print(f"Warning: no repos found in {REPOS_DIR}", file=sys.stderr)
         return []
     repos = sorted(p for p in REPOS_DIR.iterdir() if p.is_dir() and (p / ".git").exists())
     if not repos:
         print(f"Warning: no repos found in {REPOS_DIR}", file=sys.stderr)
+        return repos
+    if only_listed and REPOS_LIST.is_file():
+        listed = set()
+        for raw in REPOS_LIST.read_text().splitlines():
+            url = raw.strip()
+            if not url or url.startswith("#"):
+                continue
+            listed.add(url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git"))
+        repos = [r for r in repos if r.name in listed]
     return repos
 
 
@@ -191,20 +200,24 @@ def setup_workspace(identifier, parent_dir, force=False, run_venv_setup=True):
 
     ensure_repos()
 
-    repos = discover_repos()
+    # Use all repos for removal (cleans stale registrations from repos removed from
+    # repos.txt), but only repos.txt-listed repos for adding (so removing a URL from
+    # repos.txt immediately excludes it from new workspaces).
+    all_repos = discover_repos()
+    active_repos = discover_repos(only_listed=True)
 
     if workspace.exists():
         if not force:
             print(f"Error: workspace '{workspace}' already exists.", file=sys.stderr)
             sys.exit(1)
         print(f"Removing existing workspace: {workspace}")
-        remove_worktrees(workspace, repos)
+        remove_worktrees(workspace, all_repos)
         shutil.rmtree(workspace)
 
     print(f"Creating workspace: {workspace}")
     workspace.mkdir(parents=True)
 
-    for repo in repos:
+    for repo in active_repos:
         add_worktree(workspace, repo)
 
     venv_path = workspace / "venv"
@@ -267,7 +280,7 @@ def update_workspace(identifier, parent_dir):
     ensure_repos()
 
     added = []
-    for repo in discover_repos():
+    for repo in discover_repos(only_listed=True):
         project = add_worktree(workspace, repo)
         if project is not None:
             added.append(project)
