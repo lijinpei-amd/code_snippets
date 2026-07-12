@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STOW_DIR="$SCRIPT_DIR/dotfiles"
-# The "dot-" directory convention (dot-config, dot-claude, ...) needs GNU Stow
+# The "dot-" directory convention (dot-config, dot-codex, ...) needs GNU Stow
 # >= 2.4.0: 2.3.1's --dotfiles mistranslates a "dot-" prefixed *directory* under
 # --no-folding. install_base builds 2.4.x into ~/proot/stow (see build_stow.sh);
 # resolve_stow() prefers that build but accepts any new-enough stow on PATH, so
@@ -37,7 +37,7 @@ resolve_stow() {
 # Symlink the files in dotfiles/PACKAGE/ into $HOME. Every package uses stow's
 # --dotfiles convention: a "dot-" prefix on a file OR directory is rewritten to
 # a leading "." at the target (dot-bashrc_stow -> ~/.bashrc_stow,
-# dot-config/nvim/... -> ~/.config/nvim/..., dot-claude/... -> ~/.claude/...).
+# dot-config/nvim/... -> ~/.config/nvim/..., dot-codex/... -> ~/.codex/...).
 # This requires GNU Stow >= 2.4.0 (provided via ~/proot/stow). Any pre-existing
 # real (non-symlink) file at a target path is moved aside to <path>.bak-<timestamp>
 # first, so both first-time runs and re-runs are idempotent. --no-folding keeps
@@ -791,11 +791,9 @@ config_codex() { stow_pkg codex; }
 
 config_claude() {
     json_patch ~/.claude.json '.hasCompletedOnboarding = true'
-    # The stowed settings.json deliberately omits the gateway endpoint and
-    # secret (ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY / ANTHROPIC_CUSTOM_HEADERS);
-    # those are provided out-of-band (e.g. exported from the personal ~/.env.sh)
-    # so no credential lands in the repo.
-    stow_pkg claude
+    # Durable Claude Code configuration is managed separately by chezmoi at
+    # git@github.com:lijinpei-amd/dotfiles.git. Gateway settings and credentials
+    # remain out-of-band (for example, exported from the personal ~/.env.sh).
 }
 
 install_gh() {

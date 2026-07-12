@@ -6,7 +6,7 @@
 # --dotfiles option mis-translates a "dot-" prefixed *directory* under
 # --no-folding: it fails to link the directory's contents (or hard-errors when
 # the target directory already exists). 2.4.0 fixes this, so the dotfiles
-# packages can use the "dot-" convention uniformly (dot-config, dot-claude,
+# packages can use the "dot-" convention uniformly (for example, dot-config and
 # dot-codex) instead of literal dotted directory names.
 #
 # Idempotent: a no-op if $PREFIX already has the target version. Upgrades are

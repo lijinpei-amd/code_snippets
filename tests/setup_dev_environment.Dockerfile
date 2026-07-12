@@ -98,5 +98,4 @@ RUN set -eux; \
     test -L "$HOME/.config/ccache/ccache.conf"; \
     test -L "$HOME/.config/gdb/gdbinit"; \
     test -L "$HOME/.codex/config.toml"; \
-    test -L "$HOME/.claude/settings.json"; \
     test -f .git/hooks/pre-commit
