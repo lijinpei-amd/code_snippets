@@ -9,8 +9,7 @@ ENV HOME=/root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 WORKDIR /work/code_snippets
-COPY setup_dev_environment.sh build_stow.sh .pre-commit-config.yaml .secrets.baseline ./
-COPY dotfiles ./dotfiles
+COPY setup_dev_environment.sh .pre-commit-config.yaml .secrets.baseline ./
 
 RUN set -eux; \
     test ! -e .git; \
@@ -30,11 +29,10 @@ RUN set -eux; \
 RUN bash ./setup_dev_environment.sh
 
 RUN set -eux; \
-    export PATH="$HOME/.local/bin:$HOME/proot/stow/bin:$HOME/proot/nvim/bin:$PATH"; \
+    export PATH="$HOME/.local/bin:$HOME/proot/nvim/bin:$PATH"; \
     if [ -s "$HOME/.nvm/nvm.sh" ]; then . "$HOME/.nvm/nvm.sh"; fi; \
     git status --short >/dev/null; \
     test "$(git rev-list --all --count)" -eq 0; \
-    "$HOME/proot/stow/bin/stow" --version | grep -q '2.4.1'; \
     command -v zsh; \
     command -v git; \
     command -v curl; \
@@ -49,8 +47,6 @@ RUN set -eux; \
     command -v fzf; \
     command -v ccache; \
     command -v gdb; \
-    command -v make; \
-    command -v perl; \
     command -v clang; \
     command -v clang++; \
     command -v gh; \
@@ -78,24 +74,7 @@ RUN set -eux; \
     grep -Eq '^[[:space:]]*(source|\.)[[:space:]].*\.zshenv_stow' "$HOME/.zshenv"; \
     env -i HOME="$HOME" TERM="$TERM" PATH=/usr/bin:/bin zsh -ic \
         'typeset -f git_prompt_info >/dev/null'; \
-    env -i HOME="$HOME" TERM="$TERM" PATH=/usr/bin:/bin zsh -c ' \
-        command -v uv >/dev/null && \
-        command -v node >/dev/null && \
-        command -v nvim >/dev/null && \
-        case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) exit 1 ;; esac && \
-        case ":$PATH:" in *":$HOME/proot/stow/bin:"*) ;; *) exit 1 ;; esac && \
-        case ":$PATH:" in *":$HOME/proot/nvim/bin:"*) ;; *) exit 1 ;; esac'; \
-    nvim --headless -u "$HOME/.config/nvim/init.lua" \
-        -c 'lua assert(vim.v.errmsg == "", vim.v.errmsg)' -c qall; \
     test -d "$HOME/.tmux/plugins/tpm"; \
     test -f "$HOME/.local/share/nvim/site/autoload/plug.vim"; \
-    test -L "$HOME/.zshenv_stow"; \
-    test -L "$HOME/.zshrc_stow"; \
-    test -L "$HOME/.bashrc_stow"; \
-    test -L "$HOME/.tmux.conf"; \
-    test -L "$HOME/.config/nvim/init.lua"; \
-    test -L "$HOME/.gitignore"; \
-    test -L "$HOME/.config/ccache/ccache.conf"; \
-    test -L "$HOME/.config/gdb/gdbinit"; \
-    test -L "$HOME/.codex/config.toml"; \
+    jq -e '.hasCompletedOnboarding == true' "$HOME/.claude.json" >/dev/null; \
     test -f .git/hooks/pre-commit

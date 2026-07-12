@@ -9,7 +9,7 @@
 # (OCaml + Rocq + coq-simple-io for the Extraction chapter) in its own switch,
 # without disturbing any system OCaml/opam setup.
 #
-# Layout decisions (must stay in sync with dotfiles/env/dot-env_stow.sh):
+# Layout decisions (must stay in sync with the chezmoi-managed ~/.env_stow.sh):
 #   - OPAMROOT = ~/proot/rocq        (opam couples build tree + install prefix in
 #                                     one switch, so this is THE install dest)
 #   - switch   = CP.2025.08.0~9.0~2025.08
@@ -130,8 +130,8 @@ if ! simple_io_installed; then
 fi
 
 echo "==> Done. Rocq installed to $PREFIX/$ROCQ_SWITCH"
-echo "    The env vars are managed by dotfiles/env/dot-env_stow.sh (stowed via"
-echo "    'setup_dev_environment.sh --components env'); open a new shell to pick"
-echo "    them up, or for a one-off:"
+echo "    The env vars are managed by chezmoi in ~/.env_stow.sh. Run"
+echo "    'chezmoi apply ~/.env_stow.sh', then open a new shell to pick them up,"
+echo "    or for a one-off:"
 echo "      export OPAMROOT=\"$PREFIX\""
 echo "      eval \"\$(opam env --switch='$ROCQ_SWITCH' --set-switch)\""

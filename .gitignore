@@ -1,8 +1,3 @@
-# The global core.excludesfile (~/.gitignore) ignores ".codex". Re-include the
-# legacy literal-dotted-dir package path if it is used again.
-!dotfiles/codex/.codex/
-!dotfiles/codex/.codex/**
-
 # Python bytecode caches (e.g. workspace/__pycache__ from the build helpers).
 __pycache__/
 *.py[cod]

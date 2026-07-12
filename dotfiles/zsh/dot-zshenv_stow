@@ -1,7 +1,0 @@
-# ~/.zshenv_stow — source this from your own ~/.zshenv, the way ~/.zshrc
-# sources ~/.zshrc_stow. zsh reads ~/.zshenv on EVERY invocation (including
-# non-interactive scripts), so keep this to environment only; interactive bits
-# stay in ~/.zshrc. Load the repository-managed layer directly so a fresh
-# install works even before the optional private ~/.env.sh exists.
-[ -r "$HOME/.env_stow.sh" ] && source "$HOME/.env_stow.sh"
-[ -r "$HOME/.env.sh" ] && source "$HOME/.env.sh"

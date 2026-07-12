@@ -65,93 +65,6 @@ test_activate_staged_tree_stops_when_old_tree_cannot_move() (
     ! find "$destination" -mindepth 1 -name '.activate-stage.*' -print -quit | grep -q .
 )
 
-test_stow_pkg_rolls_back_partial_backup_failure() (
-    local tmp backup_moves=0 stow_called=0
-    tmp=$(mktemp -d "${TMPDIR:-/tmp}/stow-partial-backup-test.XXXXXX")
-    trap 'rm -rf "$tmp"' EXIT
-
-    # shellcheck source=../setup_dev_environment.sh
-    source "$REPO_ROOT/setup_dev_environment.sh"
-    HOME="$tmp/home"
-    STOW_DIR="$tmp/dotfiles"
-    mkdir -p "$HOME" "$STOW_DIR/sample"
-    printf '%s\n' managed-one > "$STOW_DIR/sample/dot-one"
-    printf '%s\n' managed-two > "$STOW_DIR/sample/dot-two"
-    printf '%s\n' original-one > "$HOME/.one"
-    printf '%s\n' original-two > "$HOME/.two"
-
-    resolve_stow() { return 0; }
-    mock_stow() { stow_called=1; return 0; }
-    STOW_BIN=mock_stow
-    mv() {
-        local target
-        target=${@: -1}
-        if [[ "$target" == "$HOME"/*.bak-* ]]; then
-            backup_moves=$((backup_moves + 1))
-            if [ "$backup_moves" -eq 2 ]; then
-                return 73
-            fi
-        fi
-        command mv "$@"
-    }
-
-    if stow_pkg sample; then
-        echo "error: stow_pkg succeeded after its second backup move failed" >&2
-        return 1
-    fi
-
-    [ "$backup_moves" -eq 2 ]
-    [ "$stow_called" -eq 0 ]
-    [ "$(cat "$HOME/.one")" = original-one ]
-    [ "$(cat "$HOME/.two")" = original-two ]
-    ! find "$HOME" -name '*.bak-*' -print -quit | grep -q .
-)
-
-test_stow_pkg_preserves_replacement_during_partial_rollback() (
-    local tmp backup_moves=0 first_target="" first_backup=""
-    tmp=$(mktemp -d "${TMPDIR:-/tmp}/stow-concurrent-replacement-test.XXXXXX")
-    trap 'rm -rf "$tmp"' EXIT
-
-    # shellcheck source=../setup_dev_environment.sh
-    source "$REPO_ROOT/setup_dev_environment.sh"
-    HOME="$tmp/home"
-    STOW_DIR="$tmp/dotfiles"
-    mkdir -p "$HOME" "$STOW_DIR/sample"
-    printf '%s\n' managed-one > "$STOW_DIR/sample/dot-one"
-    printf '%s\n' managed-two > "$STOW_DIR/sample/dot-two"
-    printf '%s\n' original-one > "$HOME/.one"
-    printf '%s\n' original-two > "$HOME/.two"
-
-    resolve_stow() { return 0; }
-    mock_stow() { return 99; }
-    STOW_BIN=mock_stow
-    mv() {
-        local source target
-        source=${@: -2:1}
-        target=${@: -1}
-        if [[ "$target" == "$HOME"/*.bak-* ]]; then
-            backup_moves=$((backup_moves + 1))
-            if [ "$backup_moves" -eq 1 ]; then
-                first_target=$source
-                first_backup=$target
-            elif [ "$backup_moves" -eq 2 ]; then
-                printf '%s\n' concurrent-replacement > "$first_target"
-                return 73
-            fi
-        fi
-        command mv "$@"
-    }
-
-    if stow_pkg sample; then
-        echo "error: stow_pkg succeeded after a backup move failed" >&2
-        return 1
-    fi
-
-    [ "$(cat "$first_target")" = concurrent-replacement ]
-    [[ "$(cat "$first_backup")" == original-* ]]
-    [ "$(find "$HOME" -name '*.bak-*' -type f | wc -l)" -eq 1 ]
-)
-
 test_activate_staged_tree_rejects_reappeared_destination() (
     local tmp staged destination fault_destination old_backup=""
     tmp=$(mktemp -d "${TMPDIR:-/tmp}/activate-staged-tree-race-test.XXXXXX")
@@ -191,60 +104,23 @@ test_activate_staged_tree_rejects_reappeared_destination() (
     [ ! -e "$destination/new" ]
 )
 
-test_build_stow_exact_moves_preserve_reappeared_destinations() (
-    local tmp staged destination backup fault_mode fault_staged fault_destination fault_backup
-    tmp=$(mktemp -d "${TMPDIR:-/tmp}/build-stow-move-race-test.XXXXXX")
+test_config_nvim_skips_without_managed_config() (
+    local tmp nvim_called=0
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/config-nvim-no-config-test.XXXXXX")
     trap 'rm -rf "$tmp"' EXIT
 
-    # build_stow.sh is source-guarded so its transaction helpers can be tested
-    # without downloading or compiling Stow.
-    # shellcheck source=../build_stow.sh
-    source "$REPO_ROOT/build_stow.sh"
-    staged="$tmp/staged"
-    destination="$tmp/destination"
-    backup="$tmp/backup"
-    fault_staged=$staged
-    fault_destination=$destination
-    fault_backup=$backup
-    mkdir "$staged"
-    printf '%s\n' new > "$staged/new"
+    # shellcheck source=../setup_dev_environment.sh
+    source "$REPO_ROOT/setup_dev_environment.sh"
+    HOME="$tmp/home"
+    XDG_DATA_HOME="$HOME/.local/share"
+    mkdir -p "$XDG_DATA_HOME/nvim/site/autoload"
+    printf '%s\n' '" vim-plug fixture' > "$XDG_DATA_HOME/nvim/site/autoload/plug.vim"
 
-    fault_mode=activate
-    mv() {
-        local source target
-        source=${@: -2:1}
-        target=${@: -1}
-        if [ "$fault_mode" = activate ] && [ "$source" = "$fault_staged" ] && [ "$target" = "$fault_destination" ]; then
-            mkdir "$fault_destination"
-            printf '%s\n' concurrent > "$fault_destination/replacement"
-        elif [ "$fault_mode" = restore ] && [ "$source" = "$fault_backup" ] && [ "$target" = "$fault_destination" ]; then
-            mkdir "$fault_destination"
-            printf '%s\n' concurrent-restore > "$fault_destination/replacement"
-        fi
-        command mv "$@"
-    }
+    nvim() { nvim_called=1; return 99; }
 
-    if move_tree_exact_noreplace "$staged" "$destination"; then
-        echo "error: exact activation accepted a destination that reappeared" >&2
-        return 1
-    fi
-    [ -e "$staged/new" ]
-    [ "$(cat "$destination/replacement")" = concurrent ]
-    [ ! -e "$destination/staged" ]
-
-    rm -rf "$destination"
-    mkdir "$backup"
-    printf '%s\n' old > "$backup/old"
-    PREFIX="$destination"
-    BACKUP_PREFIX="$backup"
-    fault_mode=restore
-    if restore_previous_stow_prefix; then
-        echo "error: exact restore accepted a destination that reappeared" >&2
-        return 1
-    fi
-    [ -e "$backup/old" ]
-    [ "$(cat "$destination/replacement")" = concurrent-restore ]
-    [ ! -e "$destination/backup" ]
+    config_nvim 2>"$tmp/stderr"
+    [ "$nvim_called" -eq 0 ]
+    grep -Fq 'run chezmoi apply first' "$tmp/stderr"
 )
 
 prepare_context() {
@@ -252,9 +128,7 @@ prepare_context() {
     local -a inputs=(
         .pre-commit-config.yaml
         .secrets.baseline
-        build_stow.sh
         setup_dev_environment.sh
-        dotfiles
         tests/setup_dev_environment.Dockerfile
     )
 
@@ -298,10 +172,8 @@ run_test() {
 }
 
 test_activate_staged_tree_stops_when_old_tree_cannot_move
-test_stow_pkg_rolls_back_partial_backup_failure
-test_stow_pkg_preserves_replacement_during_partial_rollback
 test_activate_staged_tree_rejects_reappeared_destination
-test_build_stow_exact_moves_preserve_reappeared_destinations
+test_config_nvim_skips_without_managed_config
 prepare_context
 run_test ubuntu "$UBUNTU_IMAGE"
 run_test archlinux "$ARCH_IMAGE"

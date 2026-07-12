@@ -2,47 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-STOW_DIR="$SCRIPT_DIR/dotfiles"
-# The "dot-" directory convention (dot-config, dot-codex, ...) needs GNU Stow
-# >= 2.4.0: 2.3.1's --dotfiles mistranslates a "dot-" prefixed *directory* under
-# --no-folding. install_base builds 2.4.x into ~/proot/stow (see build_stow.sh);
-# resolve_stow() prefers that build but accepts any new-enough stow on PATH, so
-# --config-only works on hosts that already have a suitable stow.
-STOW_BIN="$HOME/proot/stow/bin/stow"
 
-# stow_at_least_24 BIN — true if BIN is a stow with version >= 2.4.0.
-stow_at_least_24() {
-    local v major minor
-    v=$("$1" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1) || return 1
-    [ -n "$v" ] || return 1
-    major=${v%%.*}; minor=${v#*.}; minor=${minor%%.*}
-    [ "$major" -gt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -ge 4 ]; }
-}
-
-# resolve_stow — point STOW_BIN at a usable (>= 2.4.0) stow, or fail clearly.
-# Prefers ~/proot/stow, then falls back to a new-enough stow on PATH.
-resolve_stow() {
-    if [ -x "$STOW_BIN" ] && stow_at_least_24 "$STOW_BIN"; then return 0; fi
-    local path_stow
-    path_stow=$(command -v stow 2>/dev/null || true)
-    if [ -n "$path_stow" ] && stow_at_least_24 "$path_stow"; then
-        STOW_BIN="$path_stow"; return 0
-    fi
-    echo "error: GNU Stow >= 2.4.0 not found (needed for --dotfiles directory packages);" >&2
-    echo "       run $SCRIPT_DIR/build_stow.sh to build it into ~/proot/stow" >&2
-    return 1
-}
-
-# stow_pkg PACKAGE
-# Symlink the files in dotfiles/PACKAGE/ into $HOME. Every package uses stow's
-# --dotfiles convention: a "dot-" prefix on a file OR directory is rewritten to
-# a leading "." at the target (dot-bashrc_stow -> ~/.bashrc_stow,
-# dot-config/nvim/... -> ~/.config/nvim/..., dot-codex/... -> ~/.codex/...).
-# This requires GNU Stow >= 2.4.0 (provided via ~/proot/stow). Any pre-existing
-# real (non-symlink) file at a target path is moved aside to <path>.bak-<timestamp>
-# first, so both first-time runs and re-runs are idempotent. --no-folding keeps
-# stow from symlinking entire directories like ~/.config (which would capture
-# other tools' configs); only individual files become symlinks.
 path_present() {
     [ -e "$1" ] || [ -L "$1" ]
 }
@@ -55,91 +15,6 @@ move_path_exact_noreplace() {
 
     mv -Tn -- "$source" "$destination" || return 1
     ! path_present "$source"
-}
-
-rollback_stow_backups() {
-    local remove_managed_links="$1"
-    local -n targets_ref="$2" backups_ref="$3" sources_ref="$4"
-    local i target backup expected actual expected_real
-
-    for ((i=${#targets_ref[@]} - 1; i >= 0; i--)); do
-        target=${targets_ref[$i]}
-        backup=${backups_ref[$i]}
-        expected=${sources_ref[$i]}
-
-        # A failed Stow invocation may have installed some of its own links
-        # before returning. Remove only the exact managed link; never clobber a
-        # file or link that appeared concurrently.
-        if [ "$remove_managed_links" -eq 1 ] && [ -L "$target" ]; then
-            actual=$(readlink -f -- "$target" || true)
-            expected_real=$(readlink -f -- "$expected" || true)
-            if [ -n "$expected_real" ] && [ "$actual" = "$expected_real" ]; then
-                if ! rm -- "$target"; then
-                    echo "warning: could not remove managed symlink at $target; backup remains at $backup" >&2
-                    continue
-                fi
-            else
-                echo "warning: not overwriting unexpected symlink at $target; backup remains at $backup" >&2
-                continue
-            fi
-        elif path_present "$target"; then
-            echo "warning: not overwriting unexpected replacement at $target; backup remains at $backup" >&2
-            continue
-        fi
-
-        if ! path_present "$backup"; then
-            echo "warning: backup disappeared before rollback: $backup" >&2
-            continue
-        fi
-
-        # GNU mv -n can report success when it declines to overwrite a target.
-        # Check that the source actually disappeared so a destination created
-        # during rollback cannot turn this into either data loss or nesting.
-        if ! move_path_exact_noreplace "$backup" "$target"; then
-            echo "warning: could not restore $backup to $target; backup remains in place" >&2
-        fi
-    done
-}
-
-stow_pkg() {
-    local pkg="$1"
-    local pkg_dir="$STOW_DIR/$pkg"
-    local -a moved_targets=() backup_paths=() source_paths=()
-    [ -d "$pkg_dir" ] || { echo "error: missing stow package $pkg_dir" >&2; exit 1; }
-    resolve_stow || exit 1
-    local ts
-    ts=$(date +%Y%m%d-%H%M%S)
-    while IFS= read -r -d '' f; do
-        local rel="${f#"$pkg_dir"/}"
-        # Mirror stow's --dotfiles rewrite (leading "dot-" and any "/dot-"
-        # component -> ".") to find the real target path.
-        local link_rel="${rel/#dot-/.}"
-        local target="$HOME/${link_rel//\/dot-//.}"
-        if [ -e "$target" ] && [ ! -L "$target" ]; then
-            local backup="$target.bak-$ts" suffix=0
-            while [ -e "$backup" ] || [ -L "$backup" ]; do
-                suffix=$((suffix + 1))
-                backup="$target.bak-$ts.$suffix"
-            done
-            if ! move_path_exact_noreplace "$target" "$backup"; then
-                echo "error: could not back up $target; restoring earlier user files" >&2
-                if path_present "$backup"; then
-                    echo "warning: the original may remain at $backup; it will not be overwritten" >&2
-                fi
-                rollback_stow_backups 0 moved_targets backup_paths source_paths
-                return 1
-            fi
-            moved_targets+=("$target")
-            backup_paths+=("$backup")
-            source_paths+=("$f")
-            echo "    backed up $target -> $backup"
-        fi
-    done < <(find "$pkg_dir" -type f -print0)
-    if ! "$STOW_BIN" --dir="$STOW_DIR" --target="$HOME" --dotfiles --no-folding --restow "$pkg"; then
-        echo "error: stowing $pkg failed; restoring moved user files" >&2
-        rollback_stow_backups 1 moved_targets backup_paths source_paths
-        return 1
-    fi
 }
 
 # json_patch FILE [JQ_ARGS...] — atomically apply a jq filter to a JSON file,
@@ -364,7 +239,7 @@ pkg_install() {
 # ---------------------------------------------------------------------------
 
 # DEFAULT_COMPONENTS run on a plain (no --components) invocation.
-DEFAULT_COMPONENTS=(base zsh env bash inputrc tmux nvim git llvm ccache gdb node codex claude gh uv precommit hf)
+DEFAULT_COMPONENTS=(base zsh tmux nvim llvm node claude gh uv precommit hf)
 # OPT_IN_COMPONENTS are recognised by --components but excluded from the default
 # run. rocq builds a dedicated opam + OCaml + Rocq/Coq toolchain (~10-40 min,
 # heavy) needed only for the Software Foundations volumes, so it must be asked
@@ -375,13 +250,8 @@ OPT_IN_COMPONENTS=(rocq)
 ALL_COMPONENTS=("${DEFAULT_COMPONENTS[@]}" "${OPT_IN_COMPONENTS[@]}")
 
 install_base() {
-    # make + perl are build deps for stow (GNU Stow is a Perl program).
     # (opam's unzip dependency lives in build_rocq.sh, which is opt-in.)
-    pkg_install zsh git curl ca-certificates python3-pynvim silversearcher-ag wget tmux jq ccache gdb make perl sudo usermod cmake ninja fzf
-    # Build GNU Stow >= 2.4.0 into ~/proot/stow; the distro package is 2.3.1,
-    # which mistranslates "dot-" prefixed directories under --dotfiles --no-folding.
-    # build_stow.sh is idempotent (no-op if the right version is already installed).
-    "$SCRIPT_DIR/build_stow.sh"
+    pkg_install zsh git curl ca-certificates python3-pynvim silversearcher-ag wget tmux jq ccache gdb sudo usermod cmake ninja fzf
 }
 
 install_zsh() {
@@ -399,16 +269,15 @@ install_zsh() {
     install_verified_tree oh-my-zsh "$url" "$sha256" "$revision" "$zsh_dir" oh-my-zsh.sh
 }
 
-# Stows ~/.zshenv_stow (environment for all shells) and ~/.zshrc_stow
-# (interactive prompt). Existing ~/.zshrc content is retained and the managed
-# fragment is appended only when no active source command already references it.
+# Wires the chezmoi-managed ~/.zshenv_stow (environment for all shells) and
+# ~/.zshrc_stow (interactive prompt) into the user's startup files. Existing
+# ~/.zshrc content is retained and the managed fragment is appended only when no
+# active source command already references it.
 # Oh My Zsh must load first because the managed prompt uses its color and Git
 # helpers. Existing user initialization is honored; otherwise a guarded block is
 # inserted immediately before an existing managed-fragment source or appended.
 config_zsh() {
     local zshrc="$HOME/.zshrc" zshenv="$HOME/.zshenv" tmp
-
-    stow_pkg zsh
 
     # Resolve a pre-existing symlink so insertion rewrites its target rather
     # than replacing the user's link.
@@ -484,16 +353,10 @@ EOF
     as_root usermod -s "$(command -v zsh)" "$(id -un)"
 }
 
-config_env()     { stow_pkg env; }
-config_bash()    { stow_pkg bash; }
-config_inputrc() { stow_pkg inputrc; }
-
 # tpm (Tmux Plugin Manager) is to tmux what vim-plug is to nvim: install_tmux
-# installs the manager plus every declared plugin from verified archives, while
-# config_tmux only stows the conf. dot-tmux.conf's final `run` line loads tpm at tmux
-# startup, so without tpm that line fails with 127. install runs before config,
-# so the clone also creates the real ~/.tmux directory that stow_pkg then links
-# name-session.sh into. The manager itself is pinned to a reviewed commit.
+# installs the manager plus every declared plugin from verified archives. The
+# chezmoi-managed ~/.tmux.conf loads tpm at startup, so without tpm its final
+# `run` line fails with 127. The manager itself is pinned to a reviewed commit.
 install_tmux() {
     local tpm_dir="$HOME/.tmux/plugins/tpm"
     local navigator_dir="$HOME/.tmux/plugins/vim-tmux-navigator"
@@ -507,14 +370,6 @@ install_tmux() {
     url="https://codeload.github.com/christoomey/vim-tmux-navigator/tar.gz/${revision}"
     install_verified_tree vim-tmux-navigator "$url" "$sha256" "$revision" \
         "$navigator_dir" vim-tmux-navigator.tmux
-}
-
-config_tmux() {
-    stow_pkg tmux
-    # install_tmux installs every declared plugin from a verified commit
-    # archive. Do not invoke TPM's network installer here: config-only mode
-    # must not clone mutable plugin heads, and the full install already has
-    # everything this configuration declares.
 }
 
 install_nvim() {
@@ -570,9 +425,11 @@ install_nvim() {
 }
 
 config_nvim() {
-    stow_pkg nvim
+    local init_lua="$HOME/.config/nvim/init.lua"
     local plug_vim="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/site/autoload/plug.vim"
-    if [ -f "$plug_vim" ] && command -v nvim >/dev/null 2>&1; then
+    if [ ! -f "$init_lua" ]; then
+        echo "    (skipping PlugUpdate: $init_lua is not installed; run chezmoi apply first)" >&2
+    elif [ -f "$plug_vim" ] && command -v nvim >/dev/null 2>&1; then
         # plug.vim itself is installed from a verified commit in install_nvim;
         # keep that reviewed manager revision unchanged.
         # PlugUpdate also forces existing plugin checkouts to their declared
@@ -581,13 +438,6 @@ config_nvim() {
     else
         echo "    (skipping PlugUpdate: vim-plug or nvim not installed)" >&2
     fi
-}
-
-config_git() {
-    git config --global user.name "Li Jinpei"
-    git config --global user.email "jinpli@amd.com"
-    git config --global core.excludesfile "$HOME/.gitignore"
-    stow_pkg git
 }
 
 install_llvm() {
@@ -639,17 +489,8 @@ install_llvm() {
 # Rocq prover (formerly Coq), for the Software Foundations volumes. build_rocq.sh
 # compiles Rocq 9.0.x + coq-simple-io into its own opam root at ~/proot/rocq and
 # is idempotent (no-op if already built). The env vars (OPAMROOT, switch PATH,
-# OCaml runtime paths) are managed by the `env` component via
-# dotfiles/env/dot-env_stow.sh, so there is no separate config_rocq.
+# OCaml runtime paths) are managed separately by chezmoi in ~/.env_stow.sh.
 install_rocq() { "$SCRIPT_DIR/build_rocq.sh"; }
-
-# Cross-worktree ccache config (base_dir / hash_dir / sloppiness). ccache itself
-# is installed in install_base; this only stows ~/.config/ccache/ccache.conf.
-config_ccache() { stow_pkg ccache; }
-
-# Global gdbinit that maps the /llvm-project build sentinel back to whichever
-# worktree a binary lives in (companion to LLVM_USE_RELATIVE_PATHS_IN_FILES).
-config_gdb() { stow_pkg gdb; }
 
 install_node() {
     local nvm_revision="62387b8f92aa012d48202747fd75c40850e5e261"
@@ -786,8 +627,6 @@ install_node() {
     codex --version >/dev/null
     rm -rf "$tmp"
 }
-
-config_codex() { stow_pkg codex; }
 
 config_claude() {
     json_patch ~/.claude.json '.hasCompletedOnboarding = true'
