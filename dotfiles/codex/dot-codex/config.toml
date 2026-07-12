@@ -12,9 +12,9 @@ hooks = true
 [model_providers.amd_llm]
 name = "amd_llm"
 base_url = "https://llm-api.amd.com/OpenAI/"
-env_http_headers = {
-  "Ocp-Apim-Subscription-Key"="LLM_GATEWAY_KEY",
-}
+
+[model_providers.amd_llm.env_http_headers]
+"Ocp-Apim-Subscription-Key" = "LLM_GATEWAY_KEY"
 
 # Persisted hook trust state. Codex keys this by the absolute path of
 # hooks.json and matches it verbatim at runtime (no ~ / env expansion), so
@@ -22,6 +22,6 @@ env_http_headers = {
 # openai/codex#6646 and #21615.
 [hooks.state]
 
-[hooks.state."/mnt/nvme2/jinpli/workspace/home/jinpli/.codex/hooks.json:pre_tool_use:0:0"]
+[hooks.state."/raid/jinpli/workspace/home/jinpli/.codex/hooks.json:pre_tool_use:0:0"]
 trusted_hash = "sha256:519db058169a13bc0fe89df01d643f9cb43a08a4a48f5f38efe9b0a4de08abb6"
 enabled = true

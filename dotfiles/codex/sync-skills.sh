@@ -2,13 +2,27 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-source_skills_dir="$script_dir/dot-codex/skills"
-codex_home="${CODEX_HOME:-$HOME/.codex}"
-target_skills_dir="$codex_home/skills"
 timestamp="$(date +%Y%m%d-%H%M%S)"
+
+canonicalize_path() {
+    python3 -c 'import os, sys; print(os.path.realpath(os.path.abspath(sys.argv[1])))' "$1"
+}
+
+source_skills_dir="$(canonicalize_path "$script_dir/dot-codex/skills")"
+codex_home="$(canonicalize_path "${CODEX_HOME:-$HOME/.codex}")"
+target_skills_dir="$(canonicalize_path "$codex_home/skills")"
 
 if [[ ! -d "$source_skills_dir" ]]; then
     echo "missing source skills directory: $source_skills_dir" >&2
+    exit 1
+fi
+
+if [[ "$source_skills_dir" == "$target_skills_dir" \
+      || "$source_skills_dir" == "$target_skills_dir"/* \
+      || "$target_skills_dir" == "$source_skills_dir"/* ]]; then
+    echo "source and target skill roots must not be identical or overlap:" >&2
+    echo "  source: $source_skills_dir" >&2
+    echo "  target: $target_skills_dir" >&2
     exit 1
 fi
 
@@ -33,7 +47,8 @@ for source_skill in "$source_skills_dir"/*; do
     skill_name="$(basename -- "$source_skill")"
     target_skill="$target_skills_dir/$skill_name"
 
-    if [[ -L "$target_skill" && "$(readlink -- "$target_skill")" == "$source_skill" ]]; then
+    if [[ -L "$target_skill" \
+          && "$(canonicalize_path "$target_skill")" == "$source_skill" ]]; then
         echo "ok: $target_skill -> $source_skill"
         continue
     fi

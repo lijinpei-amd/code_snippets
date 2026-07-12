@@ -1,0 +1,6 @@
+# Default-deny the normal repository context. The development-environment test
+# builds a separate context from an explicit Git-tracked allowlist.
+*
+
+!Dockerfile
+!build_rocm_docker.sh

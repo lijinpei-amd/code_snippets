@@ -93,7 +93,8 @@ For detailed review patterns observed from prior LLVM PRs, read [reviewer-patter
 Before finishing LLVM work, verify:
 
 - Pre-fix behavior was reproduced and post-fix behavior was observed locally.
-- Checks were regenerated with the relevant update script, then inspected.
+- Checks were regenerated with the relevant update script, inspected, and
+  unchanged by a second identical updater run.
 - No stray debug prints, verbose comments, `verify`/`-verify-machineinstrs`, or unneeded target setup remain.
 - Relevant lit tests and any applicable Alive2/llubi checks passed.
 - Commits, if created, are split logically, use `[Component]` subjects, include `Fixes:` where appropriate, and avoid Claude attribution.

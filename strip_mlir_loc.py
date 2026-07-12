@@ -32,6 +32,12 @@ def _scan_string(text, i):
     return i
 
 
+def _scan_line_comment(text, i):
+    """Advance past an MLIR // comment, retaining the newline for scanning."""
+    newline = text.find('\n', i + 2)
+    return len(text) if newline == -1 else newline
+
+
 def _find_loc_spans(text):
     """Return [(start, end), ...] for every top-level `loc(...)` occurrence."""
     n = len(text)
@@ -41,6 +47,9 @@ def _find_loc_spans(text):
         c = text[i]
         if c == '"':
             i = _scan_string(text, i)
+            continue
+        if text.startswith('//', i):
+            i = _scan_line_comment(text, i)
             continue
         # Cheap prefix test first; word-boundary check only on the rare hit.
         if text.startswith(LOC, i) and (
@@ -54,13 +63,21 @@ def _find_loc_spans(text):
                 if cj == '"':
                     j = _scan_string(text, j)
                     continue
+                if text.startswith('//', j):
+                    j = _scan_line_comment(text, j)
+                    continue
                 if cj == '(':
                     depth += 1
                 elif cj == ')':
                     depth -= 1
                 j += 1
-            spans.append((start, j))
-            i = j
+            # An unmatched loc( is malformed (or may be unfinished input).  It
+            # is not safe to interpret the rest of the file as its annotation.
+            if depth == 0:
+                spans.append((start, j))
+                i = j
+            else:
+                break
         else:
             i += 1
     return spans
@@ -74,13 +91,13 @@ def strip_loc(text):
         # drop the whole line so no orphan `#loc<N> =` remains.
         line_start = text.rfind('\n', 0, s) + 1
         prefix = text[line_start:s]
+        newline = text.find('\n', e)
+        line_end = len(text) if newline == -1 else newline + 1
         if (
             prefix.lstrip().startswith('#loc')
             and prefix.rstrip().endswith('=')
-            and text.find('\n', e) != -1
-            and text[e:text.find('\n', e)].strip() == ''
+            and text[e:line_end].strip() == ''
         ):
-            line_end = text.find('\n', e) + 1
             pieces.append(text[last:line_start])
             last = line_end
             continue

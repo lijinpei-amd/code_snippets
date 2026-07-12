@@ -45,13 +45,13 @@ git worktree list
 ```
 - **Never `git stash` here** — the stash stack is shared across all worktrees on
   the common `.git`, so stash/pop can pull another session's changes into yours.
-  Use `/tmp` patches or a throwaway WIP commit instead (see reference).
+  Use a private `mktemp` patch or a throwaway WIP commit instead (see reference).
 - If the task names a GitHub issue/PR, fetch it live first:
   `gh issue view N` / `gh pr view N` / `gh pr diff N`.
 
 ## Build
 
-Assertions always **ON**; build only the narrow tool you need; truncate logs.
+Assertions always **ON**; build only the narrow tool you need; keep failures visible.
 Build-dir layout varies per worktree (`.../NN/llvm-project/build/` *or*
 `.../NN/build/llvm-project/`) — **discover it, don't assume** (see reference).
 
@@ -62,10 +62,15 @@ cmake -S llvm -B build -G Ninja \
   -DLLVM_ENABLE_PROJECTS="mlir;clang;lld" \
   -DLLVM_CCACHE_BUILD=ON -DLLVM_OPTIMIZED_TABLEGEN=ON
 
-ninja -C build opt 2>&1 | tail -1          # narrow target; or llc/clang/mlir-opt/FileCheck
-ninja -C build LLVMInstCombine && ninja -C build opt 2>&1 | tail -1   # iterate: lib then tool
-CCACHE_DISABLE=1 ninja -C build opt        # force a guaranteed-fresh binary
+ninja -C build opt                         # narrow target; or llc/clang/mlir-opt/FileCheck
+ninja -C build LLVMInstCombine && ninja -C build opt   # iterate: lib then tool
+ninja -C build -d explain opt              # explain why outputs are dirty/clean
+CCACHE_DISABLE=1 ninja -C build opt        # bypass ccache for work Ninja schedules
 ```
+
+`CCACHE_DISABLE=1` does not make a clean Ninja target dirty. Edit or touch an
+existing relevant source, or remove the specific suspect output, before rerunning
+the target when a real rebuild is needed. Never create a placeholder source file.
 
 ## Test
 
@@ -77,12 +82,16 @@ build/bin/opt -S -passes=instcombine foo.ll | build/bin/FileCheck foo.ll   # one
 ```
 
 **(Re)generate CHECK lines with the official UTC scripts** pointed at your build —
-reviewers reject hand-written checks. Then confirm the regen is clean:
+reviewers reject hand-written checks. Inspect the intended diff, then rerun the
+same updater and verify that the file is byte-for-byte stable:
 ```bash
 python3 llvm/utils/update_test_checks.py     --opt-binary build/bin/opt   <test>.ll
 python3 llvm/utils/update_llc_test_checks.py --llc-binary build/bin/llc   <test>.ll
 python3 clang/utils/update_cc_test_checks.py --clang build/bin/clang      <test>.c
-git diff --exit-code -- <test>.ll
+before=$(sha256sum path/to/test.ll)
+python3 llvm/utils/update_test_checks.py --opt-binary build/bin/opt path/to/test.ll
+test "$before" = "$(sha256sum path/to/test.ll)"
+git diff --check -- path/to/test.ll
 ```
 
 ## Debug
@@ -99,13 +108,15 @@ git diff --exit-code -- <test>.ll
 - **Reduce** with `llvm-reduce` + an `interesting.sh` that greps the *exact*
   assert text (candidate = last arg), then hand-finish to a minimal readable case:
   ```bash
-  cat > /tmp/interesting.sh <<'EOF'
+  reduce_dir=$(mktemp -d "${TMPDIR:-/tmp}/llvm-reduce.XXXXXX")
+  trap 'rm -rf -- "$reduce_dir"' EXIT
+  cat > "$reduce_dir/interesting.sh" <<'EOF'
   #!/usr/bin/env bash
   /abs/build/bin/opt -passes=instcombine -disable-output "$1" 2>&1 \
     | grep -q 'cast<Ty>() argument of incompatible type'
   EOF
-  chmod +x /tmp/interesting.sh
-  llvm-reduce --test=/tmp/interesting.sh /tmp/crash.ll -o /tmp/reduced.ll
+  chmod 700 "$reduce_dir/interesting.sh"
+  llvm-reduce --test="$reduce_dir/interesting.sh" crash.ll -o reduced.ll
   ```
   (Use `llvm-reduce`, not bugpoint.)
 - **Correctness / UB:** validate with alive2 (`alive-tv repro.ll`, or
@@ -114,7 +125,7 @@ git diff --exit-code -- <test>.ll
   `llvm-diff a.ll b.ll` for IR equivalence across a refactor.
 - **Shared-lib A/B gotcha:** tools link against `libLLVM*.so`, so copying
   `build/bin/llc` does *not* snapshot behavior — copy the `.so`s. See reference.
-- **Bisect:** build `opt` at `<sha>^` and `<sha>` in `/tmp` Release builds;
+- **Bisect:** build `opt` at `<sha>^` and `<sha>` in private `mktemp -d` Release builds;
   `git bisect run` scripts use 0=good,1=bad,125=skip and rebuild inside.
 
 ## Test-case quality (reviewers care a lot)
@@ -156,7 +167,8 @@ git diff --exit-code -- <test>.ll
 ## Closing checklist
 
 1. Pre-fix repro confirmed; post-fix confirmed fixed (empirically); tree restored.
-2. CHECKs regenerated with UTC; `git diff --exit-code` clean; `git diff --check`.
+2. CHECKs regenerated with UTC; a second updater run is byte-stable; intended
+   diff inspected; `git diff --check` clean.
 3. No stray debug prints, verbose comments, `verify`/`-verify-machineinstrs`, or
    unneeded triple/datalayout.
 4. Relevant lit suite passes; alive2/llubi clean for correctness changes.

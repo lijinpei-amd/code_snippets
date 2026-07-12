@@ -7,8 +7,8 @@ Use this reference before running heavy LLVM commands, doing A/B comparisons, sw
 The LLVM setup uses many worktrees under:
 
 ```text
-/mnt/nvme2/jinpli/workspace/home/jinpli/development/workspace/<NN>/llvm-project
-/mnt/nvme2/jinpli/workspace/home/jinpli/development/repos/llvm-project
+/raid/jinpli/workspace/home/jinpli/development/workspace/<NN>/llvm-project
+/raid/jinpli/workspace/home/jinpli/development/repos/llvm-project
 ```
 
 Multiple sessions may work in different worktrees concurrently, often on detached HEADs. Check:
@@ -20,9 +20,11 @@ git worktree list
 
 Never use `git stash` here. The stash stack is shared by all worktrees using the common `.git`, so stash/pop can move another session's changes into the current worktree. Use one of these instead:
 
-- Save a patch under `/tmp` with `git diff > /tmp/name.patch`, restore only files you own, then reapply with `git apply`.
+- Create `patch_file=$(mktemp "${TMPDIR:-/tmp}/llvm-wip.XXXXXX")`, save
+  with `git diff > "$patch_file"`, restore only files you own, then reapply it.
 - Make a temporary local WIP commit in the current worktree and undo it with non-destructive commands after comparison.
-- Copy only the input/output artifacts needed for an A/B test into `/tmp`.
+- Copy only the input/output artifacts needed for an A/B test into a private
+  directory created with `mktemp -d`.
 
 ## Build Directories And Tools
 
@@ -52,7 +54,10 @@ ninja -C build clang
 ninja -C build mlir-opt
 ```
 
-Build narrow targets, preferably with assertions enabled. If a binary seems stale while iterating, force a fresh compile with `CCACHE_DISABLE=1 ninja -C build <tool>`.
+Build narrow targets, preferably with assertions enabled. If a binary seems
+stale, use `ninja -C build -d explain <tool>` first. `CCACHE_DISABLE=1` bypasses
+ccache only for commands Ninja schedules; touch the relevant source or remove
+the specific suspect output before running `CCACHE_DISABLE=1 ninja -C build <tool>`.
 
 Typical focused tests:
 
@@ -80,9 +85,11 @@ This LLVM build links tools against shared `libLLVM*.so` libraries. Tool binarie
 For A/B testing a CodeGen or transform change:
 
 1. Build the changed version.
-2. Copy the relevant `build/lib/libLLVM*.so*` files into a `/tmp` directory.
+2. Create a private directory with
+   `changed_libs=$(mktemp -d "${TMPDIR:-/tmp}/llvm-libs.XXXXXX")` and copy the
+   relevant `build/lib/libLLVM*.so*` files into it.
 3. Restore/rebuild the base version without using `git stash`.
-4. Run with `LD_LIBRARY_PATH=/tmp/changed-libs build/bin/llc ...` versus the base libs.
+4. Run with `LD_LIBRARY_PATH="$changed_libs" build/bin/llc ...` versus the base libs.
 
 This is especially useful for backend pass changes where relinking the shared library changes behavior while the tool binary itself may not change.
 
@@ -109,7 +116,10 @@ python3 llvm/utils/update_llc_test_checks.py --llc-binary build/bin/llc path/to/
 python3 clang/utils/update_cc_test_checks.py --clang build/bin/clang path/to/test.cpp
 ```
 
-Adjust arguments to match the test's RUN lines. After regenerating, inspect the diff for noisy unrelated changes.
+Adjust arguments to match the test's RUN lines. After regenerating, inspect the
+diff for noisy unrelated changes. Then record the test file's checksum, rerun the
+same updater, and verify the checksum is unchanged. This proves regeneration is
+idempotent without requiring the intentional Git diff to be empty.
 
 ## Final Local Checks
 

@@ -19,41 +19,45 @@ vim.api.nvim_create_user_command("Ninja", function(opts)
 end, { nargs = "*" })
 
 vim.fn['plug#begin']()
-vim.fn['plug#']('lifepillar/vim-solarized8', { branch = 'neovim' })
-vim.fn['plug#']('overcache/NeoSolarized')
-vim.fn['plug#']('tomasr/molokai')
-vim.fn['plug#']('dracula/vim')
-vim.fn['plug#']('mhartington/oceanic-next')
-vim.fn['plug#']('morhetz/gruvbox')
-vim.fn['plug#']('sainnhe/sonokai')
-vim.fn['plug#']('sainnhe/everforest')
-vim.fn['plug#']('catppuccin/nvim')
-vim.fn['plug#']('cocopon/iceberg.vim')
-vim.fn['plug#']('rakr/vim-one')
-vim.fn['plug#']('sonph/onehalf')
-vim.fn['plug#']('lewis6991/moonlight.vim')
-vim.fn['plug#']('folke/tokyonight.nvim')
-vim.fn['plug#']('savq/melange-nvim')
-vim.fn['plug#']('mileszs/ack.vim')
-vim.fn['plug#']('mhinz/vim-grepper')
-vim.fn['plug#']('vim-airline/vim-airline')
-vim.fn['plug#']('vim-airline/vim-airline-themes')
-vim.fn['plug#']('powerman/vim-plugin-ansiesc')
-vim.fn['plug#']('nvim-tree/nvim-web-devicons')
-vim.fn['plug#']('preservim/nerdtree')
-vim.fn['plug#']('tiagofumo/vim-nerdtree-syntax-highlight')
-vim.fn['plug#']('sindrets/diffview.nvim')
-vim.fn['plug#']('preservim/tagbar')
-vim.fn['plug#']('christoomey/vim-tmux-navigator')
-vim.fn['plug#']('preservim/vimux')
-vim.fn['plug#']('sakhnik/nvim-gdb', { ['do'] = ':!./install.sh' })
-vim.fn['plug#']('rust-lang/rust.vim')
-vim.fn['plug#']('vim-autoformat/vim-autoformat')
-vim.fn['plug#']('nvim-lua/plenary.nvim')
-vim.fn['plug#']('junegunn/fzf', { ['do'] = './install --bin' })
-vim.fn['plug#']('junegunn/fzf.vim')
+vim.fn['plug#']('lifepillar/vim-solarized8', { branch = 'neovim', commit = '1d05915cc9050ce1a8a6b94d8c2e48ead197c756' })
+vim.fn['plug#']('overcache/NeoSolarized', { commit = 'b94b1a9ad51e2de015266f10fdc6e142f97bd617' })
+vim.fn['plug#']('tomasr/molokai', { commit = 'c67bdfcdb31415aa0ade7f8c003261700a885476' })
+vim.fn['plug#']('dracula/vim', { commit = '4f068752154e70ef8e03d6a70992033fff20a165' })
+vim.fn['plug#']('mhartington/oceanic-next', { commit = '09833f72d5ba23de2e8bcae18f479f326f5f677a' })
+vim.fn['plug#']('morhetz/gruvbox', { commit = '5d15b2765f59754d7ac263c88a0f6e3e58124951' })
+vim.fn['plug#']('sainnhe/sonokai', { commit = 'b023c5280b16fe2366f5e779d8d2756b3e5ee9c3' })
+vim.fn['plug#']('sainnhe/everforest', { commit = '85a86eb62409e3ec88713bff3d1b9d7374e112e4' })
+vim.fn['plug#']('catppuccin/nvim', { commit = '05e8787020dcfdb937bf2ff23855ea2415b4e072' })
+vim.fn['plug#']('cocopon/iceberg.vim', { commit = '23835d5ed696436f716cbfdb56a93a7850fe3b18' })
+vim.fn['plug#']('rakr/vim-one', { commit = '187f5c85b682c1933f8780d4d419c55d26a82e24' })
+vim.fn['plug#']('sonph/onehalf', { commit = '75eb2e97acd74660779fed8380989ee7891eec56' })
+vim.fn['plug#']('lewis6991/moonlight.vim', { commit = '4f066e8742159c0ffed1550bd9d3dec854323f3e' })
+vim.fn['plug#']('folke/tokyonight.nvim', { commit = 'cdc07ac78467a233fd62c493de29a17e0cf2b2b6' })
+vim.fn['plug#']('savq/melange-nvim', { commit = 'ce42f6b629beeaa00591ba73a77d3eeac4cf28ce' })
+vim.fn['plug#']('mileszs/ack.vim', { commit = '36e40f9ec91bdbf6f1adf408522a73a6925c3042' })
+vim.fn['plug#']('mhinz/vim-grepper', { commit = 'acaaf32edaa11d82fb972d2af36b949ec3042928' })
+vim.fn['plug#']('vim-airline/vim-airline', { commit = '9e0beefd6e28c92d876559f07d8595f454c08cb7' })
+vim.fn['plug#']('vim-airline/vim-airline-themes', { commit = '77aab8c6cf7179ddb8a05741da7e358a86b2c3ab' })
+vim.fn['plug#']('powerman/vim-plugin-ansiesc', {
+  commit = '690f820d20b6e3a79ba20499874eb7333aa4ca5c',
+})
+vim.fn['plug#']('nvim-tree/nvim-web-devicons', { commit = 'dad71387de386a946b123079d0e53f23028f3abd' })
+vim.fn['plug#']('preservim/nerdtree', { commit = '690d061b591525890f1471c6675bcb5bdc8cdff9' })
+vim.fn['plug#']('tiagofumo/vim-nerdtree-syntax-highlight', { commit = '35e70334a2ff6e89b82a145d1ac889e82d1ddb4e' })
+vim.fn['plug#']('sindrets/diffview.nvim', { commit = '4516612fe98ff56ae0415a259ff6361a89419b0a' })
+vim.fn['plug#']('preservim/tagbar', { commit = '07cb8247487208124978daff8e13624667635457' })
+vim.fn['plug#']('christoomey/vim-tmux-navigator', { commit = 'e41c431a0c7b7388ae7ba341f01a0d217eb3a432' })
+vim.fn['plug#']('preservim/vimux', { commit = 'd6cb7f63a8bb428ffc27060b7f83c77fb115589c' })
+vim.fn['plug#']('sakhnik/nvim-gdb', { commit = '67abac716b626ece57f3a7c72121542f0b3edfe9' })
+vim.fn['plug#']('rust-lang/rust.vim', { commit = '889b9a7515db477f4cb6808bef1769e53493c578' })
+vim.fn['plug#']('vim-autoformat/vim-autoformat', { commit = '38161c4e875cf198789f32e0f773039696a431f0' })
+vim.fn['plug#']('nvim-lua/plenary.nvim', { commit = '74b06c6c75e4eeb3108ec01852001636d85a932b' })
+vim.fn['plug#']('junegunn/fzf', { commit = '24832e97ef9640e5f859ede8dc163cf3c27145cb' })
+vim.fn['plug#']('junegunn/fzf.vim', { commit = 'd2a59a992a2455f609c0fde2ebd84427ea8f919a' })
 vim.fn['plug#end']()
-vim.cmd.colorscheme("NeoSolarized")
+-- A fresh setup loads this file once before PlugUpdate has cloned themes.
+-- Keep that bootstrap load valid; subsequent starts apply the pinned theme.
+pcall(vim.cmd.colorscheme, "NeoSolarized")
 
 -- C/C++: 2-space indent with cindent
 vim.api.nvim_create_autocmd("FileType", {
@@ -86,9 +90,30 @@ vim.api.nvim_create_autocmd("FileType", {
 	end,
 })
 
-local clang_format_py = '/usr/share/clang/clang-format.py'
-vim.keymap.set('v', '<C-K>', ':py3f ' .. clang_format_py .. '<cr>')
-vim.keymap.set('i', '<C-K>', '<c-o>:py3f ' .. clang_format_py .. '<cr>')
+local function find_clang_format_py()
+	local candidates = {}
+	if vim.env.CLANG_FORMAT_PY and vim.env.CLANG_FORMAT_PY ~= "" then
+		table.insert(candidates, vim.env.CLANG_FORMAT_PY)
+	end
+	for version = 40, 15, -1 do
+		table.insert(candidates,
+			string.format("/usr/lib/llvm-%d/share/clang/clang-format.py", version))
+	end
+	table.insert(candidates, "/usr/share/clang/clang-format.py")
+	for _, path in ipairs(candidates) do
+		if vim.fn.filereadable(path) == 1 then return path end
+	end
+	return nil
+end
+
+local clang_format_py = find_clang_format_py()
+if clang_format_py and vim.fn.has("python3") == 1 then
+	local helper = vim.fn.fnameescape(clang_format_py)
+	vim.keymap.set('v', '<C-K>', ':py3f ' .. helper .. '<cr>',
+		{ desc = "Format selection with clang-format.py" })
+	vim.keymap.set('i', '<C-K>', '<c-o>:py3f ' .. helper .. '<cr>',
+		{ desc = "Format with clang-format.py" })
+end
 
 -- Pick the highest-numbered clangd-N on PATH, falling back to plain `clangd`.
 -- Works on Arch's unversioned binary and on Ubuntu/Debian where apt.llvm.org
@@ -187,11 +212,12 @@ for _, mode in ipairs(nav_modes) do
   end
 end
 
--- Forward focus events into :terminal buffers (e.g. Claude Code), combining
+-- Forward focus events into explicitly opted-in :terminal buffers, combining
 -- nvim's own FocusGained/FocusLost with the buffer/window the user is viewing.
 -- Requires the outer terminal to emit focus reporting and, in tmux,
 -- `set -g focus-events on`. Without those, nvim never sees focus transitions
--- and embedded programs will believe nvim is permanently focused.
+-- and embedded programs will believe nvim is permanently focused. Run
+-- :TerminalFocusForward in a terminal buffer to opt in, or use ! to opt out.
 do
 	local nvim_focused = true
 	local last_sent = {}
@@ -200,6 +226,7 @@ do
 	local function sync(bufnr)
 		if not vim.api.nvim_buf_is_valid(bufnr) then return end
 		if vim.bo[bufnr].buftype ~= "terminal" then return end
+		if vim.b[bufnr].terminal_focus_forward ~= true then return end
 		local chan = vim.bo[bufnr].channel
 		if not chan or chan == 0 then return end
 
@@ -227,6 +254,20 @@ do
 	vim.api.nvim_create_autocmd({ "BufEnter", "WinEnter" }, {
 		group = group,
 		callback = sync_all,
+	})
+	vim.api.nvim_create_autocmd("TermOpen", {
+		group = group,
+		callback = function(args)
+			vim.api.nvim_buf_create_user_command(args.buf, "TerminalFocusForward", function(opts)
+				vim.b[args.buf].terminal_focus_forward = not opts.bang
+				last_sent[args.buf] = nil
+				if not opts.bang then sync(args.buf) end
+			end, {
+				bang = true,
+				desc = "Forward terminal focus events for this buffer (! disables)",
+			})
+			sync(args.buf)
+		end,
 	})
 	vim.api.nvim_create_autocmd("BufWipeout", {
 		group = group,
@@ -412,10 +453,10 @@ local function switch_to_buffer()
 			return
 		elseif key == "<CR>" or key == "<NL>" or key == "<kEnter>" then
 			cleanup()
-			if #matches > 0 and selected > 0 then
-				vim.cmd("buffer " .. matches[selected].bufnr)
-			elseif query == "" and default_buf > 0 then
+			if query == "" and default_buf > 0 then
 				vim.cmd("buffer " .. default_buf)
+			elseif #matches > 0 and selected > 0 then
+				vim.cmd("buffer " .. matches[selected].bufnr)
 			elseif query ~= "" then
 				local choice = vim.fn.confirm(
 					string.format("[Confirm] Buffer '%s' does not exist. Create?", query),
@@ -459,4 +500,5 @@ local function switch_to_buffer()
 		end
 	end
 end
+vim.keymap.set('n', '<C-x>b', switch_to_buffer, { desc = "Switch to buffer" })
 vim.keymap.set('n', '<leader>b', vim.cmd.Buffers, { desc = "fzf buffer picker" })

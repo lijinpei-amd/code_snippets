@@ -8,10 +8,11 @@ path_prepend() {
         *) PATH="$1:$PATH" ;;
     esac
 }
+path_prepend "$HOME/.local/bin"
 path_prepend "$HOME/proot/nvim/bin"
 path_prepend "$HOME/proot/stow/bin"
 export PATH
-source "$HOME/.local/bin/env"
+[ -r "$HOME/.local/bin/env" ] && source "$HOME/.local/bin/env"
 export NVM_DIR="$HOME/.nvm"
 # shellcheck disable=SC1091
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"

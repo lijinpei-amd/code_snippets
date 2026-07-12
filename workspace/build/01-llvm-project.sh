@@ -61,9 +61,10 @@ CMAKE_ARGS=(
 cmake "${CMAKE_ARGS[@]}"
 cmake --build "$LLVM_BUILD_PATH"
 
+LLVM_BUILD_PATH_YAML=${LLVM_BUILD_PATH//\'/\'\'}
 cat > "$LLVM_PROJECT_PATH/.clangd" <<EOF
 CompileFlags:
-  CompilationDatabase: $LLVM_BUILD_PATH
+  CompilationDatabase: '$LLVM_BUILD_PATH_YAML'
 EOF
 
 # Project-scoped Claude config: keep the Co-Authored-By / "Generated with

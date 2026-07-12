@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Build nginx 1.29.8 as a fully static binary with high optimizations.
+# Build nginx 1.30.3 as a fully static binary with high optimizations.
 # Installs to ~/proot/nginx
 #
 # nginx's configure can build PCRE2, zlib, and OpenSSL from source
@@ -8,14 +8,19 @@
 #
 set -euo pipefail
 
-NGINX_VERSION="1.29.8"
+NGINX_VERSION="1.30.3"
 NGINX_URL="https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz"
+NGINX_SHA256="e5823dc6f45610993def93ebf6cfce68264af4958c77e874b7d20f3709001b8f"
 INSTALL_PREFIX="$HOME/proot/nginx"
 
 # Dependency versions (built inline by nginx's configure)
-PCRE2_VERSION="10.44"
-ZLIB_VERSION="1.3.1"
-OPENSSL_VERSION="3.4.1"
+PCRE2_VERSION="10.47"
+ZLIB_VERSION="1.3.2"
+OPENSSL_VERSION="3.5.7"
+
+PCRE2_SHA256="c08ae2388ef333e8403e670ad70c0a11f1eed021fd88308d7e02f596fcd9dc16"
+ZLIB_SHA256="bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16"
+OPENSSL_SHA256="a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8"
 
 PCRE2_URL="https://github.com/PCRE2Project/pcre2/releases/download/pcre2-${PCRE2_VERSION}/pcre2-${PCRE2_VERSION}.tar.gz"
 ZLIB_URL="https://github.com/madler/zlib/releases/download/v${ZLIB_VERSION}/zlib-${ZLIB_VERSION}.tar.gz"
@@ -34,6 +39,20 @@ on_exit() {
 }
 trap on_exit EXIT
 
+download_verified() {
+    local output="$1" url="$2" expected_sha256="$3" actual_sha256
+
+    curl -fSL --retry 3 -o "$output" "$url"
+    actual_sha256=$(sha256sum "$output" | awk '{print $1}')
+    if [ "$actual_sha256" != "$expected_sha256" ]; then
+        echo "error: SHA-256 mismatch for $output" >&2
+        echo "       expected: $expected_sha256" >&2
+        echo "       actual:   $actual_sha256" >&2
+        rm -f "$output"
+        return 1
+    fi
+}
+
 echo "============================================"
 echo " Static nginx ${NGINX_VERSION} build"
 echo " Install prefix: ${INSTALL_PREFIX}"
@@ -45,11 +64,20 @@ cd "${BUILD_DIR}"
 
 # --- Download all sources ---
 echo "[1/4] Downloading sources..."
-curl -fSL --retry 3 -o "nginx-${NGINX_VERSION}.tar.gz"     "${NGINX_URL}" &
-curl -fSL --retry 3 -o "pcre2-${PCRE2_VERSION}.tar.gz"     "${PCRE2_URL}" &
-curl -fSL --retry 3 -o "zlib-${ZLIB_VERSION}.tar.gz"       "${ZLIB_URL}" &
-curl -fSL --retry 3 -o "openssl-${OPENSSL_VERSION}.tar.gz" "${OPENSSL_URL}" &
-wait
+download_verified "nginx-${NGINX_VERSION}.tar.gz" "${NGINX_URL}" "${NGINX_SHA256}" &
+pids=($!)
+download_verified "pcre2-${PCRE2_VERSION}.tar.gz" "${PCRE2_URL}" "${PCRE2_SHA256}" &
+pids+=($!)
+download_verified "zlib-${ZLIB_VERSION}.tar.gz" "${ZLIB_URL}" "${ZLIB_SHA256}" &
+pids+=($!)
+download_verified "openssl-${OPENSSL_VERSION}.tar.gz" "${OPENSSL_URL}" "${OPENSSL_SHA256}" &
+pids+=($!)
+
+download_failed=0
+for pid in "${pids[@]}"; do
+    wait "$pid" || download_failed=1
+done
+[ "$download_failed" -eq 0 ] || exit 1
 
 echo "[2/4] Extracting sources..."
 tar xzf "nginx-${NGINX_VERSION}.tar.gz"
@@ -115,14 +143,37 @@ echo " Build complete!"
 echo " Binary:  ${INSTALL_PREFIX}/sbin/nginx"
 echo "============================================"
 
-# Verify static linking
+# Verify static linking. `ldd` output is not a reliable assertion: its wording
+# varies by platform and ignoring its exit status also lets dynamically linked
+# binaries pass. A fully static ELF has neither a program interpreter nor any
+# DT_NEEDED entries.
 echo ""
 echo "Verifying static build:"
-file "${INSTALL_PREFIX}/sbin/nginx"
-ldd "${INSTALL_PREFIX}/sbin/nginx" 2>&1 || true
+NGINX_BINARY="${INSTALL_PREFIX}/sbin/nginx"
+file "${NGINX_BINARY}"
+
+if ! command -v readelf >/dev/null 2>&1; then
+    echo "error: readelf is required to verify that nginx is fully static" >&2
+    exit 1
+fi
+
+PROGRAM_HEADERS=$(readelf --wide --program-headers "${NGINX_BINARY}")
+DYNAMIC_SECTION=$(readelf --wide --dynamic "${NGINX_BINARY}")
+
+if grep -Eq '(^|[[:space:]])INTERP([[:space:]]|$)' <<<"${PROGRAM_HEADERS}"; then
+    echo "error: ${NGINX_BINARY} has a program interpreter and is dynamically linked" >&2
+    exit 1
+fi
+
+if grep -Fq '(NEEDED)' <<<"${DYNAMIC_SECTION}"; then
+    echo "error: ${NGINX_BINARY} has DT_NEEDED entries and is dynamically linked" >&2
+    exit 1
+fi
+
+echo "Verified: no ELF interpreter or DT_NEEDED dependencies"
 
 echo ""
-ls -lh "${INSTALL_PREFIX}/sbin/nginx"
+ls -lh "${NGINX_BINARY}"
 
 echo ""
-"${INSTALL_PREFIX}/sbin/nginx" -V
+"${NGINX_BINARY}" -V

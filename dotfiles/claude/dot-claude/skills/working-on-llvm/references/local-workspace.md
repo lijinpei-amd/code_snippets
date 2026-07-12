@@ -27,9 +27,11 @@ branch and `git push --force-with-lease lijinpei-amd <branch>`; then
 
 The stash stack is shared by all worktrees on the common `.git`, so stash/pop can
 move another session's changes into the current worktree. Instead:
-- `git diff > /tmp/name.patch`, restore only files you own, reapply with `git apply`.
+- Create `patch_file=$(mktemp "${TMPDIR:-/tmp}/llvm-wip.XXXXXX")`, save
+  with `git diff > "$patch_file"`, restore only files you own, then reapply it.
 - Or make a temporary WIP commit and undo it non-destructively after comparison.
-- Or copy only the input/output artifacts needed for the A/B test into `/tmp`.
+- Or copy only the input/output artifacts needed for the A/B test into a private
+  directory created with `mktemp -d`.
 
 ## Discover the build dir (don't assume)
 
@@ -43,9 +45,9 @@ Invariant across configs: `LLVM_ENABLE_ASSERTIONS=ON`, ccache launcher, `-fuse-l
 often `LLVM_USE_SPLIT_DWARF=ON`. Build type is Debug or Release depending on the tree;
 throwaway bisect builds use Release with `-DLLVM_INCLUDE_TESTS=OFF` etc.
 
-Typical rebuilds (narrow targets only, truncate logs):
+Typical rebuilds (narrow targets only, preserving Ninja's exit status):
 ```bash
-ninja -C build opt 2>&1 | tail -1     # or llc / clang / mlir-opt / FileCheck
+ninja -C build opt     # or llc / clang / mlir-opt / FileCheck
 ```
 
 ## Shared-library A/B testing
@@ -54,9 +56,11 @@ This build links tools against shared `libLLVM*.so`. Tool binaries (`build/bin/o
 `llc`, `clang`) are thin — copying only the binary does **not** snapshot behavior; it
 still loads the current `.so`. To A/B a CodeGen/transform change:
 1. Build the changed version.
-2. Copy `build/lib/libLLVM*.so*` into a `/tmp` dir.
+2. Create a private directory with
+   `changed_libs=$(mktemp -d "${TMPDIR:-/tmp}/llvm-libs.XXXXXX")` and copy
+   `build/lib/libLLVM*.so*` into it.
 3. Restore/rebuild the base version (without `git stash`).
-4. `LD_LIBRARY_PATH=/tmp/changed-libs build/bin/llc …` vs. the base libs.
+4. `LD_LIBRARY_PATH="$changed_libs" build/bin/llc …` vs. the base libs.
 
 ## ccache / PCH staleness across worktrees
 
@@ -68,7 +72,8 @@ find build -name '*.pch' -delete
 CCACHE_RECACHE=1 ninja -C build <affected-targets>
 ```
 Durable fix: configure with `-DLLVM_ENABLE_PCH=OFF`. Use `CCACHE_DISABLE=1 ninja …`
-when you need a guaranteed-fresh binary.
+only after making the relevant input/output dirty; disabling ccache alone does
+not make Ninja rebuild a clean target.
 
 ## alive2 / llubi
 
@@ -87,6 +92,10 @@ llvm/utils/update_llc_test_checks.py --llc-binary build/bin/llc   path/to/test.l
 clang/utils/update_cc_test_checks.py --clang build/bin/clang      path/to/test.cpp
 ```
 (`--reset-variable-names` when value names churn.)
+
+After inspecting the intended diff, record the test file's checksum, run the
+same updater a second time, and verify the checksum is unchanged. This checks
+idempotence without requiring the intentional Git diff to be empty.
 
 ## Misc environment
 

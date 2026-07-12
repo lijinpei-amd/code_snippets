@@ -4,6 +4,11 @@
 import argparse
 
 
+I32_MIN = -(1 << 31)
+I32_MAX = (1 << 31) - 1
+U32_MAX = (1 << 32) - 1
+
+
 # Bit-field layouts per GFX generation, derived from AMDGPUBaseInfo.cpp
 # Each entry: (shift, width)
 LAYOUTS = {
@@ -52,6 +57,13 @@ def max_field(width):
 
 
 def decode_waitcnt(imm, gfx):
+    if isinstance(imm, bool) or not isinstance(imm, int):
+        raise TypeError("waitcnt immediate must be an integer")
+    if not I32_MIN <= imm <= U32_MAX:
+        raise ValueError(
+            f"waitcnt immediate must fit an i32 ({I32_MIN}..{I32_MAX}) "
+            f"or a 32-bit hexadecimal bit pattern (0x0..0x{U32_MAX:X})"
+        )
     layout = LAYOUTS[gfx]
     imm16 = imm & 0xFFFF
 
@@ -104,9 +116,23 @@ def format_result(imm, gfx):
 
 def parse_imm(s):
     s = s.strip().rstrip(",")
-    if s.startswith("0x") or s.startswith("0X"):
-        return int(s, 16)
-    return int(s)
+    is_hex = s.startswith(("0x", "0X"))
+    try:
+        value = int(s, 16 if is_hex else 10)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(f"invalid i32 immediate: {s!r}") from error
+
+    minimum, maximum = (0, U32_MAX) if is_hex else (I32_MIN, I32_MAX)
+    if not minimum <= value <= maximum:
+        domain = (
+            "0x00000000..0xFFFFFFFF"
+            if is_hex
+            else f"{I32_MIN}..{I32_MAX}"
+        )
+        raise argparse.ArgumentTypeError(
+            f"i32 immediate {s!r} is outside the accepted range {domain}"
+        )
+    return value
 
 
 def main():
@@ -118,14 +144,21 @@ def main():
                "  %(prog)s --gfx gfx11 0xFC07",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("immediates", nargs="+", help="i32 immediate values (decimal or 0x hex)")
+    parser.add_argument(
+        "immediates",
+        nargs="+",
+        type=parse_imm,
+        help=(
+            "i32 immediate values (signed decimal, or an unsigned 32-bit "
+            "0x hexadecimal bit pattern)"
+        ),
+    )
     parser.add_argument("--gfx", default="gfx9",
                         choices=sorted(LAYOUTS.keys()),
                         help="target GFX generation (default: gfx9)")
     args = parser.parse_args()
 
-    for i, raw in enumerate(args.immediates):
-        imm = parse_imm(raw)
+    for i, imm in enumerate(args.immediates):
         if i > 0:
             print()
         print(format_result(imm, args.gfx))
@@ -133,4 +166,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -38,13 +38,15 @@ Temporary `errs() << "DBG<issue>"` prints are acceptable locally, but grep for t
 Use `llvm-reduce`, not bugpoint, for modern LLVM IR reductions.
 
 ```bash
-cat > /tmp/interesting.sh <<'EOF'
+reduce_dir=$(mktemp -d "${TMPDIR:-/tmp}/llvm-reduce.XXXXXX")
+trap 'rm -rf -- "$reduce_dir"' EXIT
+cat > "$reduce_dir/interesting.sh" <<'EOF'
 #!/usr/bin/env bash
 out=$(/abs/build/bin/opt -passes=instcombine -disable-output "$1" 2>&1)
 printf '%s' "$out" | grep -q 'exact assert text'
 EOF
-chmod +x /tmp/interesting.sh
-build/bin/llvm-reduce --test=/tmp/interesting.sh /tmp/crash.ll -o /tmp/reduced.ll
+chmod 700 "$reduce_dir/interesting.sh"
+build/bin/llvm-reduce --test="$reduce_dir/interesting.sh" crash.ll -o reduced.ll
 ```
 
 The interestingness script must match the exact failure mode, not merely "nonzero exit", unless the crash is the only possible failure. After automated reduction, hand-finish for readability.
@@ -93,7 +95,9 @@ git log -G'<regex>' -- <paths>
 git blame <file>
 ```
 
-If a Godbolt shortlink is the only reproducer, fetch or decode it before guessing at the source. Keep downloaded source and reduced IR in `/tmp` with issue-numbered filenames.
+If a Godbolt shortlink is the only reproducer, fetch or decode it before guessing
+at the source. Keep downloaded source and reduced IR in a private `mktemp -d`
+directory rather than predictable shared `/tmp` filenames.
 
 ## Old Versus New
 

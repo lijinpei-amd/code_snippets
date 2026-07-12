@@ -1,1 +1,2 @@
-source "$HOME/.env.sh"
+[ -r "$HOME/.env_stow.sh" ] && source "$HOME/.env_stow.sh"
+[ -r "$HOME/.env.sh" ] && source "$HOME/.env.sh"

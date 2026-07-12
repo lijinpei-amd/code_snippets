@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
 BASE_URL = "https://llm-api.amd.com/api/UsageStats"
+REQUEST_TIMEOUT_SECONDS = 30
 
 PROVIDER_LABEL = {
     "AzureOpenAI": "AzureOpenAI",
@@ -26,19 +27,29 @@ COLS = ["Provider", "Model", "Requests", "Prompt Tokens", "Completion Tokens", "
 
 # ── data fetching ──────────────────────────────────────────────────────────────
 
-def fetch_usage(start: date, end: date, api_key: str) -> dict:
+def fetch_usage(
+    start: date,
+    end: date,
+    api_key: str,
+    timeout: float = REQUEST_TIMEOUT_SECONDS,
+) -> dict:
     params = urllib.parse.urlencode({"start": start.isoformat(), "end": end.isoformat()})
     req = urllib.request.Request(
         f"{BASE_URL}?{params}",
         headers={"Ocp-Apim-Subscription-Key": api_key},
     )
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.load(resp)
     except urllib.error.HTTPError as e:
-        if e.code in (400, 404):
+        if e.code == 404:
             return {"message": "No usage data."}
         raise
+
+
+def daily_query_bounds(day: date) -> tuple[date, date]:
+    """Return the API's inclusive bounds for exactly one calendar day."""
+    return day, day
 
 
 # ── formatting helpers ─────────────────────────────────────────────────────────
@@ -217,6 +228,40 @@ def _parse_date_arg(value, today, flag, parser):
         parser.error(f"Invalid value for {flag}: {value!r}. Expected YYYY-MM-DD or an integer offset.")
 
 
+def resolve_date_bounds(start_date, end_date, days, today):
+    """Resolve the inclusive dates to display, including today by default."""
+    has_start = start_date is not None
+    has_end = end_date is not None
+    has_days = days is not None
+    if has_start and has_end and has_days:
+        raise ValueError(
+            "--start, --end, and --days cannot all be specified together "
+            "(overdetermined)."
+        )
+
+    day_count = days if has_days else 3
+    if day_count < 1:
+        raise ValueError("--days must be at least 1")
+
+    if has_start and has_end:
+        pass
+    elif has_start:
+        end_date = (
+            start_date + timedelta(days=day_count - 1)
+            if has_days
+            else today
+        )
+    elif has_end:
+        start_date = end_date - timedelta(days=day_count - 1)
+    else:
+        end_date = today
+        start_date = end_date - timedelta(days=day_count - 1)
+
+    if start_date > end_date:
+        raise ValueError(f"--start ({start_date}) must not be after --end ({end_date}).")
+    return start_date, end_date
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="llm_usage.py",
@@ -244,38 +289,32 @@ def main():
         parser.error("API key not provided. Use --key <key> or set the LLM_GATEWAY_KEY environment variable.")
 
     today = date.today()
-    has_start = args.start is not None
-    has_end   = args.end   is not None
-    has_days  = args.days  is not None
-
-    if has_start and has_end and has_days:
-        parser.error("--start, --end, and --days cannot all be specified together (overdetermined).")
-
-    start_date = _parse_date_arg(args.start, today, "--start", parser) if has_start else None
-    end_date   = _parse_date_arg(args.end,   today, "--end",   parser) if has_end   else None
-    days       = args.days if has_days else 3
-
-    if has_start and has_end:
-        pass  # both anchors set; days used only for display
-    elif has_start:
-        end_date = start_date + timedelta(days=days - 1) if has_days else today
-    elif has_end:
-        start_date = end_date - timedelta(days=days - 1)
-    else:
-        end_date   = today
-        start_date = end_date - timedelta(days=days - 1)
-
-    if start_date > end_date:
-        parser.error(f"--start ({start_date}) must not be after --end ({end_date}).")
+    start_date = (
+        _parse_date_arg(args.start, today, "--start", parser)
+        if args.start is not None else None
+    )
+    end_date = (
+        _parse_date_arg(args.end, today, "--end", parser)
+        if args.end is not None else None
+    )
+    try:
+        start_date, end_date = resolve_date_bounds(
+            start_date, end_date, args.days, today
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     date_range = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(
-            lambda d: fetch_usage(d, d + timedelta(days=1), api_key),
+            # UsageStats accepts an inclusive range.  Querying d..d+1 both
+            # mixes adjacent days and makes today's request end in the future;
+            # the latter is rejected and used to make today disappear.
+            lambda d: fetch_usage(*daily_query_bounds(d), api_key),
             date_range,
         ))
-    summaries = list(zip(date_range, results))
+    summaries = list(zip(date_range, results, strict=True))
 
     account = next(
         (d.get("application", {}).get("name", "") for _, d in summaries if "application" in d),
