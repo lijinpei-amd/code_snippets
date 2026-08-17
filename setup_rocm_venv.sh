@@ -3,16 +3,19 @@ set -euo pipefail
 
 # Installs ROCm from the AMD Python wheel index (the "pip install" path in
 # https://rocm.docs.amd.com/en/latest/install/rocm.html), using uv as the
-# installer. No apt repository: everything lands in a virtualenv.
+# installer. No apt repository: everything lands in a virtualenv. Expects the
+# system packages and the uv binary from build_uv_docker.sh to already be
+# present; this script is deliberately not invoked by that one so the two can
+# live in separate Dockerfile layers.
 #
 # Integrity: the apt path this replaced verified a pinned GPG key and then let
 # apt check every package signature. AMD publishes no signatures for these
-# wheels, so while the uv binary below is SHA-256 pinned, the ~3 GiB of ROCm
-# wheels are protected by TLS alone. For a verified, reproducible build,
-# generate a lockfile with `uv pip compile --generate-hashes` and install it
-# with --require-hashes.
+# wheels, so while the uv binary is SHA-256 pinned (in build_uv_docker.sh),
+# the ~3 GiB of ROCm wheels are protected by TLS alone. For a verified,
+# reproducible build, generate a lockfile with `uv pip compile
+# --generate-hashes` and install it with --require-hashes.
 #
-# usage: build_rocm_docker.sh [rocm-version] [device-targets] [ubuntu-version]
+# usage: setup_rocm_venv.sh [rocm-version] [device-targets] [ubuntu-version]
 
 ROCM_VER="${1:-${ROCM_VER:-7.14.0}}"
 # Device (pre-compiled GPU kernel) extras. Each device wheel is ~1.6 GiB, so
@@ -23,12 +26,6 @@ ROCM_INDEX_URL="${ROCM_INDEX_URL:-https://repo.amd.com/rocm/whl-multi-arch/}"
 # Deliberately not configurable: the Dockerfile bakes this path into ENV PATH,
 # and the two would drift silently. Keep both in sync if you move it.
 ROCM_VENV="/opt/rocm-venv"
-
-UV_VERSION="0.12.4"
-UV_TARBALL="uv-x86_64-unknown-linux-gnu.tar.gz"
-UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_TARBALL}"
-# Upstream's published checksum for the release above, not a credential.
-UV_SHA256="c8c60f47e6f88d18dbf6f33d7279fb1fbf7ae76631768152cf5578c3d65729b4"  # pragma: allowlist secret
 
 if ! [[ "$ROCM_DEVICE_TARGETS" =~ ^device-(all|gfx[0-9a-z]+)(,device-(all|gfx[0-9a-z]+))*$ ]]; then
     echo "error: ROCM_DEVICE_TARGETS must be a comma-separated list of" >&2
@@ -46,44 +43,8 @@ case "$ROCM_INDEX_URL" in
         ;;
 esac
 
-# Python interpreter per Ubuntu release, as tabulated in the AMD install docs.
-# The ROCm wheels themselves are py3-none-linux_x86_64, so any of these work.
-case "$UBUNTU_VER" in
-    26.04) PYTHON="python3.14" ;;
-    24.04) PYTHON="python3.12" ;;
-    22.04) PYTHON="python3.11" ;;
-    *)
-        echo "error: unsupported Ubuntu release '$UBUNTU_VER'" >&2
-        echo "       expected one of: 26.04, 24.04, 22.04" >&2
-        exit 2
-        ;;
-esac
-
-apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    tzdata ca-certificates curl \
-    "$PYTHON" "$PYTHON-dev" "$PYTHON-venv" \
-    cmake ninja-build g++ \
-    libatomic1 libquadmath0
-ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
-echo "Asia/Shanghai" > /etc/timezone
-dpkg-reconfigure --frontend noninteractive tzdata
-rm -rf /var/lib/apt/lists/*
-
-tmpdir=$(mktemp -d)
-cleanup() { rm -rf "$tmpdir"; }
-trap cleanup EXIT
-
-curl -fSL --retry 3 -o "$tmpdir/$UV_TARBALL" "$UV_URL"
-actual_sha256=$(sha256sum "$tmpdir/$UV_TARBALL" | awk '{print $1}')
-if [ "$actual_sha256" != "$UV_SHA256" ]; then
-    echo "error: uv $UV_VERSION SHA-256 mismatch: $actual_sha256" >&2
-    exit 1
-fi
-tar -xzf "$tmpdir/$UV_TARBALL" -C "$tmpdir"
-install -m 0755 "$tmpdir/uv-x86_64-unknown-linux-gnu/uv" /usr/local/bin/uv
-install -m 0755 "$tmpdir/uv-x86_64-unknown-linux-gnu/uvx" /usr/local/bin/uvx
-uv --version
+# shellcheck source=resolve_python.sh
+source "$(dirname "${BASH_SOURCE[0]}")/resolve_python.sh"
 
 # No --seed: seeding pip resolves against uv's default index (PyPI), which
 # would make this build depend on a second registry. uv is the installer here;
@@ -113,12 +74,24 @@ uv pip install --no-cache \
 ROCM_ROOT="$("$ROCM_VENV/bin/rocm-sdk" path --root)"
 ln -sfn "$ROCM_ROOT" /opt/rocm
 
+# Auto-applied to login shells inside the image (the Dockerfile also sets these
+# via ENV; this covers login shells that bypass ENV).
 cat > /etc/profile.d/rocm.sh << EOF
 export ROCM_PATH=/opt/rocm
 export HIP_PATH=/opt/rocm
 export PATH="$ROCM_VENV/bin:/opt/rocm/bin:\$PATH"
 EOF
 chmod 0644 /etc/profile.d/rocm.sh
+
+# Drop an env.sh next to the venv's activate: sourcing it exports the ROCm
+# environment and then activates the venv in one step.
+cat > "$ROCM_VENV/bin/env.sh" << EOF
+export ROCM_PATH=/opt/rocm
+export HIP_PATH=/opt/rocm
+export PATH="/opt/rocm/bin:\$PATH"
+source "$ROCM_VENV/bin/activate"
+EOF
+chmod 0644 "$ROCM_VENV/bin/env.sh"
 
 "$ROCM_VENV/bin/rocm-sdk" version
 # Informational: this imports the core package to read its target manifest, and

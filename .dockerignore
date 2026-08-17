@@ -3,4 +3,6 @@
 *
 
 !Dockerfile
-!build_rocm_docker.sh
+!resolve_python.sh
+!build_uv_docker.sh
+!setup_rocm_venv.sh
