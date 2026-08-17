@@ -90,37 +90,6 @@ verify_openpgp_fingerprints() {
     fi
 }
 
-# Atomically replace a disposable tool tree with a verified commit archive.
-install_verified_tree() {
-    local name="$1" url="$2" sha256="$3" revision="$4" destination="$5" required_file="$6"
-    local parent tmp archive staged
-
-    if [ -f "$destination/.codex-pinned-revision" ] \
-        && [ "$(cat "$destination/.codex-pinned-revision")" = "$revision" ] \
-        && [ -e "$destination/$required_file" ]; then
-        echo "$name $revision already installed; nothing to do."
-        return 0
-    fi
-
-    parent=$(dirname "$destination")
-    mkdir -p "$parent"
-    tmp=$(mktemp -d "$parent/.${name}.stage.XXXXXX")
-    archive="$tmp/source.tar.gz"
-    staged="$tmp/staged"
-    mkdir "$staged"
-    download_verified "$url" "$sha256" "$archive" || { rm -rf "$tmp"; return 1; }
-    tar xzf "$archive" --strip-components=1 -C "$staged" || { rm -rf "$tmp"; return 1; }
-    [ -e "$staged/$required_file" ] || {
-        echo "error: $name archive lacks $required_file" >&2
-        rm -rf "$tmp"
-        return 1
-    }
-    printf '%s\n' "$revision" > "$staged/.codex-pinned-revision"
-
-    activate_staged_tree "$staged" "$destination" || { rm -rf "$tmp"; return 1; }
-    rm -rf "$tmp"
-}
-
 activate_staged_tree() {
     local staged="$1" destination="$2" backup="" backup_root=""
     local parent destination_name transfer transfer_root
@@ -239,7 +208,7 @@ pkg_install() {
 # ---------------------------------------------------------------------------
 
 # DEFAULT_COMPONENTS run on a plain (no --components) invocation.
-DEFAULT_COMPONENTS=(base zsh tmux nvim llvm node claude gh uv precommit hf)
+DEFAULT_COMPONENTS=(base chezmoi zsh nvim llvm node claude gh uv precommit hf)
 # OPT_IN_COMPONENTS are recognised by --components but excluded from the default
 # run. rocq builds a dedicated opam + OCaml + Rocq/Coq toolchain (~10-40 min,
 # heavy) needed only for the Software Foundations volumes, so it must be asked
@@ -254,140 +223,83 @@ install_base() {
     pkg_install zsh git curl ca-certificates python3-pynvim silversearcher-ag wget tmux jq ccache gdb sudo usermod cmake ninja fzf
 }
 
-install_zsh() {
-    local zsh_dir="${ZSH:-$HOME/.oh-my-zsh}"
-    local revision="677a4592b18c08ddea737f8aca70bac0e9fc9313"
-    local sha256="f8c4c980bf28c77db703e083b5d395a2c42403abddbd36467c41a50a476fd841"
-    local url="https://codeload.github.com/ohmyzsh/ohmyzsh/tar.gz/${revision}"
+# chezmoi manages the dotfiles (and, via ~/.local/share/chezmoi/.chezmoiexternal.toml,
+# the Oh My Zsh / tpm / vim-plug trees the dotfiles depend on). Install the pinned
+# binary to ~/proot/bin; ~/.env_stow.sh puts that directory on PATH.
+install_chezmoi() {
+    local version="2.72.0" platform sha256 url tmp installed_version=""
 
-    # Preserve existing installations and their custom themes/plugins. Fresh
-    # installs use a reviewed commit archive instead of executing master/main.
-    if [ -d "$zsh_dir" ]; then
-        echo "oh-my-zsh already installed, skipping"
+    mkdir -p "$HOME/proot/bin"
+    if [ -x "$HOME/proot/bin/chezmoi" ]; then
+        installed_version=$("$HOME/proot/bin/chezmoi" --version 2>/dev/null || true)
+    fi
+    if [[ "$installed_version" == *"version v$version,"* ]]; then
+        echo "chezmoi $version already installed; nothing to do."
         return 0
     fi
-    install_verified_tree oh-my-zsh "$url" "$sha256" "$revision" "$zsh_dir" oh-my-zsh.sh
+
+    case "$(uname -m)" in
+        x86_64|amd64)
+            platform=amd64
+            sha256="0d6665b96c527d57fdc562bf19e808f80f48c2d977062c03e3e65c6b09eafbce"  # pragma: allowlist secret
+            ;;
+        aarch64|arm64)
+            platform=arm64
+            sha256="e79a27621256390f03166d3965e6a1946f983a096c4d90f02c43d2aa5b563728"  # pragma: allowlist secret
+            ;;
+        *)
+            echo "error: unsupported chezmoi architecture: $(uname -m)" >&2
+            return 1
+            ;;
+    esac
+    url="https://github.com/twpayne/chezmoi/releases/download/v${version}/chezmoi_${version}_linux_${platform}.tar.gz"
+    tmp=$(mktemp -d)
+    download_verified "$url" "$sha256" "$tmp/chezmoi.tar.gz" || { rm -rf "$tmp"; return 1; }
+    tar xzf "$tmp/chezmoi.tar.gz" -C "$tmp" || { rm -rf "$tmp"; return 1; }
+    [ -x "$tmp/chezmoi" ] || {
+        echo "error: chezmoi archive does not contain the chezmoi binary" >&2
+        rm -rf "$tmp"
+        return 1
+    }
+    install -m 0755 "$tmp/chezmoi" "$HOME/proot/bin/chezmoi"
+    rm -rf "$tmp"
+    [[ "$("$HOME/proot/bin/chezmoi" --version)" == *"version v$version,"* ]]
 }
 
-# Wires the chezmoi-managed ~/.zshenv_stow (environment for all shells) and
-# ~/.zshrc_stow (interactive prompt) into the user's startup files. Existing
-# ~/.zshrc content is retained and the managed fragment is appended only when no
-# active source command already references it.
-# Oh My Zsh must load first because the managed prompt uses its color and Git
-# helpers. Existing user initialization is honored; otherwise a guarded block is
-# inserted immediately before an existing managed-fragment source or appended.
+# Pull in the dotfiles early so later config steps (e.g. config_nvim's PlugUpdate)
+# see the applied files and externals. Best-effort: a host without access to the
+# private dotfiles repo (e.g. CI with no SSH key) warns and continues.
+config_chezmoi() {
+    export PATH="$HOME/proot/bin:$PATH"
+    local repo="git@github.com:lijinpei-amd/dotfiles.git"
+    if [ -d "$HOME/.local/share/chezmoi/.git" ]; then
+        chezmoi apply || echo "warn: chezmoi apply failed; continuing" >&2
+    else
+        chezmoi init --apply "$repo" \
+            || echo "warn: chezmoi init failed (no repo access?); continuing" >&2
+    fi
+}
+
+# ~/.zshrc and ~/.zshenv are managed by chezmoi (they load Oh My Zsh and the
+# prompt directly). This step only makes zsh the login shell.
 config_zsh() {
-    local zshrc="$HOME/.zshrc" zshenv="$HOME/.zshenv" tmp
-
-    # Resolve a pre-existing symlink so insertion rewrites its target rather
-    # than replacing the user's link.
-    if [ -L "$zshrc" ]; then
-        zshrc=$(readlink -f "$zshrc")
-    fi
-
-    if ! [ -f "$zshrc" ] \
-        || ! grep -Eq '^[[:space:]]*(source|\.)[[:space:]].*oh-my-zsh\.sh' "$zshrc"; then
-        if [ -f "$zshrc" ] \
-            && grep -Eq '^[[:space:]]*(source|\.)[[:space:]].*\.zshrc_stow' "$zshrc"; then
-            tmp=$(mktemp "$(dirname "$zshrc")/.zshrc.XXXXXX")
-            awk '
-                !inserted && $0 ~ /^[[:space:]]*(source|\.)[[:space:]].*\.zshrc_stow/ {
-                    print "# Initialize the pinned Oh My Zsh tree before managed prompt config."
-                    print "if [ -z \"${CODE_SNIPPETS_OMZ_LOADED:-}\" ]; then"
-                    print "    : \"${ZSH:=$HOME/.oh-my-zsh}\""
-                    print "    export ZSH"
-                    print "    if [ -s \"$ZSH/oh-my-zsh.sh\" ]; then"
-                    print "        source \"$ZSH/oh-my-zsh.sh\""
-                    print "        export CODE_SNIPPETS_OMZ_LOADED=1"
-                    print "    fi"
-                    print "fi"
-                    inserted = 1
-                }
-                { print }
-            ' "$zshrc" > "$tmp"
-            chmod --reference="$zshrc" "$tmp"
-            mv -T -- "$tmp" "$zshrc"
-        else
-            if [ -s "$zshrc" ]; then
-                printf '\n' >> "$zshrc"
-            fi
-            cat >> "$zshrc" <<'EOF'
-# Initialize the pinned Oh My Zsh tree before managed prompt config.
-if [ -z "${CODE_SNIPPETS_OMZ_LOADED:-}" ]; then
-    : "${ZSH:=$HOME/.oh-my-zsh}"
-    export ZSH
-    if [ -s "$ZSH/oh-my-zsh.sh" ]; then
-        source "$ZSH/oh-my-zsh.sh"
-        export CODE_SNIPPETS_OMZ_LOADED=1
-    fi
-fi
-EOF
-        fi
-    fi
-
-    if ! grep -Eq '^[[:space:]]*(source|\.)[[:space:]].*\.zshrc_stow' "$zshrc"; then
-        if [ -s "$zshrc" ]; then
-            printf '\n' >> "$zshrc"
-        fi
-        cat >> "$zshrc" <<'EOF'
-# Load the repository-managed interactive zsh configuration.
-if [ -r "$HOME/.zshrc_stow" ]; then
-    source "$HOME/.zshrc_stow"
-fi
-EOF
-    fi
-
-    if ! [ -f "$zshenv" ] \
-        || ! grep -Eq '^[[:space:]]*(source|\.)[[:space:]].*\.zshenv_stow' "$zshenv"; then
-        if [ -s "$zshenv" ]; then
-            printf '\n' >> "$zshenv"
-        fi
-        cat >> "$zshenv" <<'EOF'
-# Load the repository-managed non-interactive zsh environment.
-if [ -r "$HOME/.zshenv_stow" ]; then
-    source "$HOME/.zshenv_stow"
-fi
-EOF
-    fi
-
     as_root usermod -s "$(command -v zsh)" "$(id -un)"
 }
 
-# tpm (Tmux Plugin Manager) is to tmux what vim-plug is to nvim: install_tmux
-# installs the manager plus every declared plugin from verified archives. The
-# chezmoi-managed ~/.tmux.conf loads tpm at startup, so without tpm its final
-# `run` line fails with 127. The manager itself is pinned to a reviewed commit.
-install_tmux() {
-    local tpm_dir="$HOME/.tmux/plugins/tpm"
-    local navigator_dir="$HOME/.tmux/plugins/vim-tmux-navigator"
-    local revision="e261deb1b47614eed3400089ce7197dc68acc4eb"
-    local sha256="72d92c512270d4857e27519ac97b92a52cf149afe4d92f26860c710f60bbbe37"
-    local url="https://codeload.github.com/tmux-plugins/tpm/tar.gz/${revision}"
-    install_verified_tree tpm "$url" "$sha256" "$revision" "$tpm_dir" bin/install_plugins
-
-    revision="e41c431a0c7b7388ae7ba341f01a0d217eb3a432"
-    sha256="ea2ca9a016487ba062b4a02e183eceaf5ef9b09016e1af0a5ff627a3af7a721c"
-    url="https://codeload.github.com/christoomey/vim-tmux-navigator/tar.gz/${revision}"
-    install_verified_tree vim-tmux-navigator "$url" "$sha256" "$revision" \
-        "$navigator_dir" vim-tmux-navigator.tmux
-}
-
 install_nvim() {
+    # vim-plug's plug.vim is managed by chezmoi (.chezmoiexternal.toml); this
+    # installs only the pinned Neovim binary.
     local version="0.11.7" platform sha256 release_url prefix="$HOME/proot/nvim"
-    local revision="88e31471818e9a29a8a20a0ee61360cfd7bdc1cd"
-    local plug_sha256="7e2b20cd909da9c456498684c98f03c63829170f01e34595dd8e1818a217d37c"
-    local plug_url="https://raw.githubusercontent.com/junegunn/vim-plug/${revision}/plug.vim"
-    local plug_dir="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/site/autoload"
     local tmp staged installed_version=""
 
     case "$(uname -m)" in
         x86_64|amd64)
             platform=x86_64
-            sha256="38a7c6317f94503841096c00e8fde05ef04b9472fc9d7d62b6e033cecd6f7991"
+            sha256="38a7c6317f94503841096c00e8fde05ef04b9472fc9d7d62b6e033cecd6f7991"  # pragma: allowlist secret
             ;;
         aarch64|arm64)
             platform=arm64
-            sha256="99bb3c53604e83ce18fc0b459e34cf1a5e212f4e5fbe2eb136b3c18092ae9905"
+            sha256="99bb3c53604e83ce18fc0b459e34cf1a5e212f4e5fbe2eb136b3c18092ae9905"  # pragma: allowlist secret
             ;;
         *)
             echo "error: unsupported Neovim architecture: $(uname -m)" >&2
@@ -416,12 +328,6 @@ install_nvim() {
         rm -rf "$tmp"
     fi
     export PATH="$prefix/bin:$PATH"
-
-    mkdir -p "$plug_dir"
-    tmp=$(mktemp "$plug_dir/.plug.vim.XXXXXX")
-    download_verified "$plug_url" "$plug_sha256" "$tmp" || { rm -f "$tmp"; return 1; }
-    chmod 0644 "$tmp"
-    mv -T -- "$tmp" "$plug_dir/plug.vim"
 }
 
 config_nvim() {
@@ -445,12 +351,12 @@ install_llvm() {
         arch)   pkg_install llvm clang lld ;;
         debian)
             local v=22
-            local installer_revision="1b51a8ac5d22abf492d8fae0cc9964da55464ce4"
-            local installer_sha256="9474ecd78b52aba6e923976b1e9773f5613027cc7e237b9956986cb536e02a36"
+            local installer_revision="1b51a8ac5d22abf492d8fae0cc9964da55464ce4"  # pragma: allowlist secret
+            local installer_sha256="9474ecd78b52aba6e923976b1e9773f5613027cc7e237b9956986cb536e02a36"  # pragma: allowlist secret
             local installer_url="https://raw.githubusercontent.com/opencollab/llvm-jenkins.debian.net/${installer_revision}/llvm.sh"
             local llvm_key_url="https://apt.llvm.org/llvm-snapshot.gpg.key"
-            local llvm_key_sha256="8b2a587ffd672c4687e7581dad4b2f6c1bb2ad6b480cd9771ba2ff48e0b8c75d"
-            local llvm_key_fingerprint="6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
+            local llvm_key_sha256="8b2a587ffd672c4687e7581dad4b2f6c1bb2ad6b480cd9771ba2ff48e0b8c75d"  # pragma: allowlist secret  gitleaks:allow
+            local llvm_key_fingerprint="6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"  # pragma: allowlist secret  gitleaks:allow
             local tmpdir
 
             pkg_install gnupg lsb-release software-properties-common
@@ -493,16 +399,16 @@ install_llvm() {
 install_rocq() { "$SCRIPT_DIR/build_rocq.sh"; }
 
 install_node() {
-    local nvm_revision="62387b8f92aa012d48202747fd75c40850e5e261"
-    local nvm_sha256="f215c2f08c30bcc7fc64b3eaec7136a3ac90994a91524f1f74517186025419d1"
+    local nvm_revision="62387b8f92aa012d48202747fd75c40850e5e261"  # pragma: allowlist secret
+    local nvm_sha256="f215c2f08c30bcc7fc64b3eaec7136a3ac90994a91524f1f74517186025419d1"  # pragma: allowlist secret
     local nvm_url="https://codeload.github.com/nvm-sh/nvm/tar.gz/${nvm_revision}"
     local node_version="v24.18.0"
     local node_arch node_sha256 node_url node_prefix codex_target
     local claude_version="2.1.207"
-    local claude_sha512="df40f794630ed223e65a7cfaac248729de9dea05ad43c095db32871eca441d91728c326c34eaf65e0e8a6ff5c43ec68516ee01188273ffb2fa15091c16ae5c34"
+    local claude_sha512="df40f794630ed223e65a7cfaac248729de9dea05ad43c095db32871eca441d91728c326c34eaf65e0e8a6ff5c43ec68516ee01188273ffb2fa15091c16ae5c34"  # pragma: allowlist secret
     local claude_native_package claude_native_sha512 claude_native_url
     local codex_version="0.144.1"
-    local codex_sha512="5e2af5cea3dfa5e9e1768028b21379deea27cdb0578f5f023b2cd190595566948dc849795ed92e62ef6875d10b78f14decaff4b1751c48edf801de487825cf6f"
+    local codex_sha512="5e2af5cea3dfa5e9e1768028b21379deea27cdb0578f5f023b2cd190595566948dc849795ed92e62ef6875d10b78f14decaff4b1751c48edf801de487825cf6f"  # pragma: allowlist secret
     local codex_native_alias codex_native_sha512 codex_native_url
     local tmp staged global_root claude_native_dir codex_native_dir
 
@@ -532,20 +438,20 @@ install_node() {
     case "$(uname -m)" in
         x86_64|amd64)
             node_arch=x64
-            node_sha256="783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8"
+            node_sha256="783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8"  # pragma: allowlist secret
             claude_native_package="claude-code-linux-x64"
-            claude_native_sha512="582e2ef9b46e47711763b7c5164b959dbf63079217e492ddbb34707ba65c22ed3cb53fcf0d4593f1b9e74b4eeac1cda3ce4512a9c2f79106de1d7e5abe71404b"
+            claude_native_sha512="582e2ef9b46e47711763b7c5164b959dbf63079217e492ddbb34707ba65c22ed3cb53fcf0d4593f1b9e74b4eeac1cda3ce4512a9c2f79106de1d7e5abe71404b"  # pragma: allowlist secret
             codex_native_alias="codex-linux-x64"
-            codex_native_sha512="1cd19523e06e96b39a0bfd08cc1bdde842fada3ecbae56c52a26eb870ea16638c28c0794633441da3078a83cd737535fa838ba5ebbe78a87f79306f069bdb896"
+            codex_native_sha512="1cd19523e06e96b39a0bfd08cc1bdde842fada3ecbae56c52a26eb870ea16638c28c0794633441da3078a83cd737535fa838ba5ebbe78a87f79306f069bdb896"  # pragma: allowlist secret
             codex_target="x86_64-unknown-linux-musl"
             ;;
         aarch64|arm64)
             node_arch=arm64
-            node_sha256="6b4484c2190274175df9aa8f28e2d758a819cb1c1fe6ab481e2f95b463ab8508"
+            node_sha256="6b4484c2190274175df9aa8f28e2d758a819cb1c1fe6ab481e2f95b463ab8508"  # pragma: allowlist secret
             claude_native_package="claude-code-linux-arm64"
-            claude_native_sha512="26672f9fc4a0f3e15a3cb3b2f6de21ee2a7e2b58b9618ae2993d7e8992f5607053038e161c9f47fc5f035b740a9d5caa506a84cdaf538393cf563ce18b97f0ca"
+            claude_native_sha512="26672f9fc4a0f3e15a3cb3b2f6de21ee2a7e2b58b9618ae2993d7e8992f5607053038e161c9f47fc5f035b740a9d5caa506a84cdaf538393cf563ce18b97f0ca"  # pragma: allowlist secret
             codex_native_alias="codex-linux-arm64"
-            codex_native_sha512="e39d68d79f97b5a5c209bdf9b7f282cb23ea5c79d33f13f1b5da8460e9c4ddee2c1f901f9c8fee549c1f7633a4b0c1babd12f2e91f9f2ef48338c82e4452e643"
+            codex_native_sha512="e39d68d79f97b5a5c209bdf9b7f282cb23ea5c79d33f13f1b5da8460e9c4ddee2c1f901f9c8fee549c1f7633a4b0c1babd12f2e91f9f2ef48338c82e4452e643"  # pragma: allowlist secret
             codex_target="aarch64-unknown-linux-musl"
             ;;
         *)
@@ -644,7 +550,7 @@ install_gh() {
             local keyring=/etc/apt/keyrings/githubcli-archive-keyring.gpg
             local sources=/etc/apt/sources.list.d/github-cli.list
             local key_url="https://cli.github.com/packages/githubcli-archive-keyring.gpg"
-            local key_sha256="6084d5d7bd8e288441e0e94fc6275570895da18e6751f70f057485dc2d1a811b"
+            local key_sha256="6084d5d7bd8e288441e0e94fc6275570895da18e6751f70f057485dc2d1a811b"  # pragma: allowlist secret  gitleaks:allow
             local tmpdir
             pkg_install gnupg
             tmpdir=$(mktemp -d)
@@ -682,11 +588,11 @@ install_uv() {
     case "$(uname -m)" in
         x86_64|amd64)
             platform=x86_64-unknown-linux-gnu
-            sha256="e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224"
+            sha256="e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224"  # pragma: allowlist secret
             ;;
         aarch64|arm64)
             platform=aarch64-unknown-linux-gnu
-            sha256="03e9fe0a81b0718d0bc84625de3885df6cc3f89a8b6af6121d6b9f6113fb6533"
+            sha256="03e9fe0a81b0718d0bc84625de3885df6cc3f89a8b6af6121d6b9f6113fb6533"  # pragma: allowlist secret
             ;;
         *)
             echo "error: unsupported uv architecture: $(uname -m)" >&2
@@ -742,10 +648,10 @@ install_precommit() {
     ensure_uv
     install_verified_uv_tool \
         'https://files.pythonhosted.org/packages/80/6e/4b28b62ecb6aae56769c34a8ff1d661473ec1e9519e2d5f8b2c150086b26/pre_commit-4.6.0-py2.py3-none-any.whl' \
-        'e2cf246f7299edcabcf15f9b0571fdce06058527f0a06535068a86d38089f29b'
+        'e2cf246f7299edcabcf15f9b0571fdce06058527f0a06535068a86d38089f29b'  # pragma: allowlist secret
     install_verified_uv_tool \
         'https://files.pythonhosted.org/packages/4e/5e/4f5fe4b89fde1dc3ed0eb51bd4ce4c0bca406246673d370ea2ad0c58d747/detect_secrets-1.5.0-py3-none-any.whl' \
-        'e24e7b9b5a35048c313e983f76c4bd09dad89f045ff059e354f9943bf45aa060'
+        'e24e7b9b5a35048c313e983f76c4bd09dad89f045ff059e354f9943bf45aa060'  # pragma: allowlist secret
 
     local os arch gitleaks_platform gitleaks_sha256 trufflehog_platform trufflehog_sha256
     os=$(uname -s)
@@ -757,15 +663,15 @@ install_precommit() {
     case "$arch" in
         x86_64|amd64)
             gitleaks_platform=linux_x64
-            gitleaks_sha256="551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+            gitleaks_sha256="551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"  # pragma: allowlist secret
             trufflehog_platform=linux_amd64
-            trufflehog_sha256="1b62ea3cbc672ed5fd36e0eebb00b1fb50bbb7ee35090f42437a5852a299e16b"
+            trufflehog_sha256="1b62ea3cbc672ed5fd36e0eebb00b1fb50bbb7ee35090f42437a5852a299e16b"  # pragma: allowlist secret
             ;;
         aarch64|arm64)
             gitleaks_platform=linux_arm64
-            gitleaks_sha256="e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080"
+            gitleaks_sha256="e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080"  # pragma: allowlist secret
             trufflehog_platform=linux_arm64
-            trufflehog_sha256="e0d8722485bf592f9ef9a72009fb5184656cfab4864fed453bbbf694d5b9350b"
+            trufflehog_sha256="e0d8722485bf592f9ef9a72009fb5184656cfab4864fed453bbbf694d5b9350b"  # pragma: allowlist secret
             ;;
         *)
             echo "error: unsupported architecture for precommit tools: $arch" >&2
@@ -798,7 +704,7 @@ install_hf() {
     ensure_uv
     install_verified_uv_tool \
         'https://files.pythonhosted.org/packages/f1/ce/13b2ba57838b8db1e6bd033c1b21ce0b9f6153b87d4e4939f77074e41eb0/huggingface_hub-1.23.0-py3-none-any.whl' \
-        'b1d604788f5adc7f0eb246e03e0ec19011ca06e38400218c347dccc3dffa64a2'
+        'b1d604788f5adc7f0eb246e03e0ec19011ca06e38400218c347dccc3dffa64a2'  # pragma: allowlist secret
 }
 
 # ---------------------------------------------------------------------------

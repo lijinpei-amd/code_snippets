@@ -22,9 +22,7 @@ RUN set -eux; \
         echo 'unsupported base image: git cannot be installed' >&2; \
         exit 1; \
     fi; \
-    git init --quiet; \
-    printf '%s\n' '# pre-existing zsh configuration' 'export SETUP_TEST_ZSHRC_PRESERVED=1' > "$HOME/.zshrc"; \
-    printf '%s\n' '# pre-existing zsh environment' 'export SETUP_TEST_ZSHENV_PRESERVED=1' > "$HOME/.zshenv"
+    git init --quiet
 
 RUN bash ./setup_dev_environment.sh
 
@@ -66,15 +64,7 @@ RUN set -eux; \
     else \
         python -c 'import pynvim'; \
     fi; \
-    test -d "$HOME/.oh-my-zsh"; \
-    grep -qx 'export SETUP_TEST_ZSHRC_PRESERVED=1' "$HOME/.zshrc"; \
-    grep -qx 'export SETUP_TEST_ZSHENV_PRESERVED=1' "$HOME/.zshenv"; \
-    grep -Eq '^[[:space:]]*(source|\.)[[:space:]].*\.zshrc_stow' "$HOME/.zshrc"; \
-    grep -Eq '^[[:space:]]*(source|\.)[[:space:]].*oh-my-zsh\.sh' "$HOME/.zshrc"; \
-    grep -Eq '^[[:space:]]*(source|\.)[[:space:]].*\.zshenv_stow' "$HOME/.zshenv"; \
-    env -i HOME="$HOME" TERM="$TERM" PATH=/usr/bin:/bin zsh -ic \
-        'typeset -f git_prompt_info >/dev/null'; \
-    test -d "$HOME/.tmux/plugins/tpm"; \
-    test -f "$HOME/.local/share/nvim/site/autoload/plug.vim"; \
+    test -x "$HOME/proot/bin/chezmoi"; \
+    "$HOME/proot/bin/chezmoi" --version; \
     jq -e '.hasCompletedOnboarding == true' "$HOME/.claude.json" >/dev/null; \
     test -f .git/hooks/pre-commit
