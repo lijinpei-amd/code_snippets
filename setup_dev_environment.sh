@@ -534,6 +534,10 @@ install_node() {
         record_lock nvm "$nvm_tag" -
     fi
 
+    # nvm.sh is not written to be nounset-safe (e.g. `nvm use` dereferences an
+    # unset PROVIDED_VERSION), so relax `set -u` while sourcing and driving nvm,
+    # then restore it. errexit stays on and is handled per-call below.
+    set +u
     # shellcheck disable=SC1091
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
     # Install Node.js and make it the default: the locked version under --locked,
@@ -543,15 +547,16 @@ install_node() {
     # would run with errexit active and could abort on a benign internal status.
     mkdir -p "$NVM_DIR/alias"
     if [ "$USE_LOCK" -eq 1 ]; then
-        node_version=$(lock_version node) || return 1
-        nvm install "$node_version" || return 1
+        node_version=$(lock_version node) || { set -u; return 1; }
+        nvm install "$node_version" || { set -u; return 1; }
         printf '%s\n' "$node_version" > "$NVM_DIR/alias/default"
         nvm use --silent "$node_version"
     else
-        nvm install --lts || return 1
+        nvm install --lts || { set -u; return 1; }
         printf 'lts/*\n' > "$NVM_DIR/alias/default"
         nvm use --lts --silent
     fi
+    set -u
     node_version=$(node --version)
     record_lock node "$node_version" -
 
