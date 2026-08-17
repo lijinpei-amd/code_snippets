@@ -48,8 +48,14 @@ def fetch_usage(
 
 
 def daily_query_bounds(day: date) -> tuple[date, date]:
-    """Return the API's inclusive bounds for exactly one calendar day."""
-    return day, day
+    """Return the API's bounds for exactly one calendar day.
+
+    UsageStats treats start/end as midnight timestamps with an *exclusive*
+    end, i.e. the window is [day 00:00, next-day 00:00).  Passing (day, day)
+    is a zero-width window that the API rejects with 404, so the end bound
+    must be the following day.
+    """
+    return day, day + timedelta(days=1)
 
 
 # ── formatting helpers ─────────────────────────────────────────────────────────
@@ -308,9 +314,8 @@ def main():
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(
-            # UsageStats accepts an inclusive range.  Querying d..d+1 both
-            # mixes adjacent days and makes today's request end in the future;
-            # the latter is rejected and used to make today disappear.
+            # UsageStats' end bound is exclusive midnight, so d..d+1 selects
+            # exactly calendar day d (see daily_query_bounds).
             lambda d: fetch_usage(*daily_query_bounds(d), api_key),
             date_range,
         ))
