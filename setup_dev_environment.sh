@@ -294,7 +294,12 @@ ALL_COMPONENTS=("${DEFAULT_COMPONENTS[@]}" "${OPT_IN_COMPONENTS[@]}")
 
 install_base() {
     # (opam's unzip dependency lives in build_rocq.sh, which is opt-in.)
-    pkg_install zsh git curl ca-certificates python3-pynvim silversearcher-ag wget tmux jq ccache gdb sudo usermod cmake ninja fzf
+    # git-lfs installs the package only; the [filter "lfs"] section that
+    # `git lfs install` would write into ~/.gitconfig is managed by chezmoi,
+    # which emits it only when git-lfs is on PATH. Installing here and applying
+    # chezmoi afterwards therefore yields the filter config; running
+    # `git lfs install` as well would just rewrite bytes chezmoi already owns.
+    pkg_install zsh git git-lfs curl ca-certificates python3-pynvim silversearcher-ag wget tmux jq ccache gdb sudo usermod cmake ninja fzf
 }
 
 # chezmoi manages the dotfiles (and, via ~/.local/share/chezmoi/.chezmoiexternal.toml,
