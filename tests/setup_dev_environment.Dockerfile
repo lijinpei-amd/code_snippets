@@ -9,7 +9,10 @@ ENV HOME=/root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 WORKDIR /work/code_snippets
-COPY setup_dev_environment.sh .pre-commit-config.yaml .secrets.baseline ./
+COPY setup_dev_environment.sh install_apt_keys.sh .pre-commit-config.yaml .secrets.baseline ./
+# install_llvm/install_gh invoke $SCRIPT_DIR/install_apt_keys.sh, which reads the
+# committed signing keys from this directory; without it the Debian path exits 127.
+COPY apt_keys ./apt_keys
 
 RUN set -eux; \
     test ! -e .git; \
