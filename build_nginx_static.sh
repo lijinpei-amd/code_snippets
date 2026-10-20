@@ -153,7 +153,6 @@ make install
 echo ""
 echo "Verifying static build:"
 NGINX_BINARY="${INSTALL_PREFIX}/sbin/nginx"
-file "${NGINX_BINARY}"
 
 if ! command -v readelf >/dev/null 2>&1; then
     echo "error: readelf is required to verify that nginx is fully static" >&2
