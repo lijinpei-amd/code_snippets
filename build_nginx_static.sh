@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Build nginx 1.30.3 as a fully static binary with high optimizations.
+# Build nginx 1.30.3 with njs as a fully static binary with high optimizations.
 # Installs to ~/proot/nginx
 #
 # nginx's configure can build PCRE2, zlib, and OpenSSL from source
@@ -10,23 +10,26 @@ set -euo pipefail
 
 NGINX_VERSION="1.30.3"
 NGINX_URL="https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz"
-NGINX_SHA256="e5823dc6f45610993def93ebf6cfce68264af4958c77e874b7d20f3709001b8f"
-INSTALL_PREFIX="$HOME/proot/nginx"
+NGINX_SHA256="e5823dc6f45610993def93ebf6cfce68264af4958c77e874b7d20f3709001b8f" # pragma: allowlist secret
+INSTALL_PREFIX="${INSTALL_PREFIX:-$HOME/proot/nginx}"
 
 # Dependency versions (built inline by nginx's configure)
 PCRE2_VERSION="10.47"
 ZLIB_VERSION="1.3.2"
 OPENSSL_VERSION="3.5.7"
+NJS_VERSION="1.0.2"
 
-PCRE2_SHA256="c08ae2388ef333e8403e670ad70c0a11f1eed021fd88308d7e02f596fcd9dc16"
-ZLIB_SHA256="bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16"
-OPENSSL_SHA256="a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8"
+PCRE2_SHA256="c08ae2388ef333e8403e670ad70c0a11f1eed021fd88308d7e02f596fcd9dc16" # pragma: allowlist secret
+ZLIB_SHA256="bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16" # pragma: allowlist secret
+OPENSSL_SHA256="a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8" # pragma: allowlist secret
+NJS_SHA256="84a114499fa6878d3ec52b99c1cf2874a91eb0d915408f418a2b1279519f09ae" # pragma: allowlist secret
 
 PCRE2_URL="https://github.com/PCRE2Project/pcre2/releases/download/pcre2-${PCRE2_VERSION}/pcre2-${PCRE2_VERSION}.tar.gz"
 ZLIB_URL="https://github.com/madler/zlib/releases/download/v${ZLIB_VERSION}/zlib-${ZLIB_VERSION}.tar.gz"
 OPENSSL_URL="https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
+NJS_URL="https://github.com/nginx/njs/archive/refs/tags/${NJS_VERSION}.tar.gz"
 
-NPROC=$(nproc)
+NPROC="${NPROC:-$(nproc)}"
 BUILD_DIR="$(mktemp -d /tmp/nginx-static-build.XXXXXX)"
 
 # Aggressive optimization flags for x86_64
@@ -54,7 +57,7 @@ download_verified() {
 }
 
 echo "============================================"
-echo " Static nginx ${NGINX_VERSION} build"
+echo " Static nginx ${NGINX_VERSION} + njs ${NJS_VERSION} build"
 echo " Install prefix: ${INSTALL_PREFIX}"
 echo " Build dir:      ${BUILD_DIR}"
 echo " Parallelism:    ${NPROC} jobs"
@@ -72,6 +75,8 @@ download_verified "zlib-${ZLIB_VERSION}.tar.gz" "${ZLIB_URL}" "${ZLIB_SHA256}" &
 pids+=($!)
 download_verified "openssl-${OPENSSL_VERSION}.tar.gz" "${OPENSSL_URL}" "${OPENSSL_SHA256}" &
 pids+=($!)
+download_verified "njs-${NJS_VERSION}.tar.gz" "${NJS_URL}" "${NJS_SHA256}" &
+pids+=($!)
 
 download_failed=0
 for pid in "${pids[@]}"; do
@@ -84,10 +89,13 @@ tar xzf "nginx-${NGINX_VERSION}.tar.gz"
 tar xzf "pcre2-${PCRE2_VERSION}.tar.gz"
 tar xzf "zlib-${ZLIB_VERSION}.tar.gz"
 tar xzf "openssl-${OPENSSL_VERSION}.tar.gz"
+tar xzf "njs-${NJS_VERSION}.tar.gz"
 
 # --- Configure nginx (it builds PCRE2, zlib, OpenSSL from source) ---
 echo "[3/4] Configuring nginx ${NGINX_VERSION}..."
 cd "nginx-${NGINX_VERSION}"
+# Use nginx's source-built OpenSSL and zlib; avoid optional system libraries.
+NJS_LIBXSLT=NO NJS_QUICKJS=NO \
 ./configure \
     --prefix="${INSTALL_PREFIX}" \
     --sbin-path="${INSTALL_PREFIX}/sbin/nginx" \
@@ -128,6 +136,7 @@ cd "nginx-${NGINX_VERSION}"
     --with-zlib="${BUILD_DIR}/zlib-${ZLIB_VERSION}" \
     --with-openssl="${BUILD_DIR}/openssl-${OPENSSL_VERSION}" \
     --with-openssl-opt="no-shared no-tests" \
+    --add-module="${BUILD_DIR}/njs-${NJS_VERSION}/nginx" \
     \
     --with-cc-opt="${OPT_CFLAGS}" \
     --with-ld-opt="${OPT_LDFLAGS}"
@@ -136,12 +145,6 @@ cd "nginx-${NGINX_VERSION}"
 echo "[4/4] Building and installing nginx..."
 make -j"${NPROC}"
 make install
-
-echo ""
-echo "============================================"
-echo " Build complete!"
-echo " Binary:  ${INSTALL_PREFIX}/sbin/nginx"
-echo "============================================"
 
 # Verify static linking. `ldd` output is not a reliable assertion: its wording
 # varies by platform and ignoring its exit status also lets dynamically linked
@@ -172,8 +175,41 @@ fi
 
 echo "Verified: no ELF interpreter or DT_NEEDED dependencies"
 
+# Use an isolated configuration to verify njs without touching the live config.
+cat > "${BUILD_DIR}/njs-verify.js" <<'EOF'
+function check(r) {
+    r.return(200, njs.version);
+}
+export default {check};
+EOF
+cat > "${BUILD_DIR}/njs-verify.conf" <<EOF
+error_log stderr;
+pid ${BUILD_DIR}/njs-verify.pid;
+events {}
+http {
+    access_log off;
+    js_import verify from ${BUILD_DIR}/njs-verify.js;
+    js_var \$njs_verified;
+    server {
+        listen 127.0.0.1:8080;
+        location / {
+            js_access verify.check;
+            js_content verify.check;
+        }
+    }
+}
+EOF
+"${NGINX_BINARY}" -t -p "${BUILD_DIR}/" -c "${BUILD_DIR}/njs-verify.conf"
+echo "Verified: njs imports and HTTP directives are available"
+
 echo ""
 ls -lh "${NGINX_BINARY}"
 
 echo ""
 "${NGINX_BINARY}" -V
+
+echo ""
+echo "============================================"
+echo " Build complete!"
+echo " Binary:  ${NGINX_BINARY}"
+echo "============================================"
