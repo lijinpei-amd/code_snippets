@@ -310,9 +310,11 @@ class LlmUsageTests(unittest.TestCase):
         self.assertEqual(start, date(2026, 7, 1))
         self.assertEqual(end, date(2026, 7, 11))
 
-    def test_daily_query_does_not_use_a_future_end_for_today(self):
+    def test_daily_query_end_is_exclusive_next_day(self):
         today = date(2026, 7, 11)
-        self.assertEqual(llm_usage.daily_query_bounds(today), (today, today))
+        self.assertEqual(
+            llm_usage.daily_query_bounds(today), (today, date(2026, 7, 12))
+        )
 
     def test_fetch_uses_timeout(self):
         response = io.BytesIO(b'{"totalRequests": 0}')
@@ -324,6 +326,40 @@ class LlmUsageTests(unittest.TestCase):
             )
         self.assertEqual(result, {"totalRequests": 0})
         self.assertEqual(urlopen.call_args.kwargs["timeout"], 4.5)
+
+    def test_model_vendor(self):
+        self.assertEqual(llm_usage.model_vendor("Claude-Opus-5.5"), "claude")
+        self.assertEqual(llm_usage.model_vendor("gpt-6.1-sol"), "openai")
+        self.assertEqual(llm_usage.model_vendor("o4-mini"), "openai")
+        self.assertIsNone(llm_usage.model_vendor("DeepSeek-V4.1-Flash"))
+
+    def test_filter_by_vendor_recomputes_totals(self):
+        def model(name, reqs, toks, cost):
+            return {"model": name, "totalRequests": reqs,
+                    "totalTokens": toks, "approxChargeInUSD": cost}
+
+        data = {
+            "totalRequests": 7, "totalTokens": 700, "approxChargeInUSD": 7.0,
+            "stats": {
+                "AzureOpenAI": [model("Claude-Opus-5.5", 1, 100, 1.0),
+                                model("gpt-5", 2, 200, 2.0),
+                                model("DeepSeek-V4.1-Flash", 4, 400, 4.0)],
+                "OnPremLLM": [model("Llama-4", 1, 10, 0.0)],
+            },
+        }
+        result = llm_usage.filter_by_vendor(data, {"claude", "openai"})
+        self.assertEqual(
+            [m["model"] for ms in result["stats"].values() for m in ms],
+            ["Claude-Opus-5.5", "gpt-5"],
+        )
+        self.assertNotIn("OnPremLLM", result["stats"])
+        self.assertEqual(result["totalRequests"], 3)
+        self.assertEqual(result["totalTokens"], 300)
+        self.assertEqual(result["approxChargeInUSD"], 3.0)
+
+    def test_filter_by_vendor_keeps_no_data_message(self):
+        data = {"message": "No usage data."}
+        self.assertEqual(llm_usage.filter_by_vendor(data, {"claude"}), data)
 
     def test_http_400_is_not_suppressed(self):
         error = urllib.error.HTTPError(

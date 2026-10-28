@@ -7,6 +7,7 @@ import functools
 import io
 import json
 import os
+import re
 import signal
 import urllib.error
 import urllib.request
@@ -21,6 +22,13 @@ PROVIDER_LABEL = {
     "AzureOpenAI": "AzureOpenAI",
     "VertexGenAI": "Vertex",
     "OnPremLLM": "OnPrem",
+}
+
+# Vendor is inferred from the model name: the gateway's provider (e.g.
+# AzureOpenAI) also hosts other vendors' models.
+VENDOR_MODEL_PATTERNS = {
+    "claude": re.compile(r"claude", re.IGNORECASE),
+    "openai": re.compile(r"gpt|o\d|chatgpt|text-embedding", re.IGNORECASE),
 }
 
 COLS = ["Provider", "Model", "Requests", "Prompt Tokens", "Completion Tokens", "Total Tokens", "Cost"]
@@ -57,6 +65,34 @@ def daily_query_bounds(day: date) -> tuple[date, date]:
     must be the following day.
     """
     return day, day + timedelta(days=1)
+
+
+# ── vendor filtering ───────────────────────────────────────────────────────────
+
+def model_vendor(model: str) -> str | None:
+    for vendor, pattern in VENDOR_MODEL_PATTERNS.items():
+        if pattern.match(model):
+            return vendor
+    return None
+
+
+def filter_by_vendor(data: dict, vendors: set[str]) -> dict:
+    """Keep only models from ``vendors`` and recompute the day's totals."""
+    if "message" in data:
+        return data
+    stats = {}
+    for provider, models in data.get("stats", {}).items():
+        kept = [m for m in models if model_vendor(m["model"]) in vendors]
+        if kept:
+            stats[provider] = kept
+    kept_models = [m for models in stats.values() for m in models]
+    return {
+        **data,
+        "stats": stats,
+        "totalRequests": sum(m.get("totalRequests", 0) for m in kept_models),
+        "totalTokens": sum(m.get("totalTokens", 0) for m in kept_models),
+        "approxChargeInUSD": sum(m.get("approxChargeInUSD", 0) for m in kept_models),
+    }
 
 
 # ── formatting helpers ─────────────────────────────────────────────────────────
@@ -289,6 +325,9 @@ def main():
                         help="API key (overrides LLM_GATEWAY_KEY env var)")
     parser.add_argument("--format", dest="fmt", choices=FORMATS, default="box",
                         help="Output format (default: box)")
+    parser.add_argument("--vendor", action="append", choices=tuple(VENDOR_MODEL_PATTERNS),
+                        help="Only count models from this vendor; repeat to combine "
+                             "(e.g. --vendor claude --vendor openai). Default: all models")
     args = parser.parse_args()
 
     api_key = args.key or os.environ.get("LLM_GATEWAY_KEY")
@@ -320,6 +359,8 @@ def main():
             lambda d: fetch_usage(*daily_query_bounds(d), api_key),
             date_range,
         ))
+    if args.vendor:
+        results = [filter_by_vendor(data, set(args.vendor)) for data in results]
     summaries = list(zip(date_range, results, strict=True))
 
     account = next(
@@ -328,8 +369,10 @@ def main():
     )
     date_label = (start_date.strftime("%b %d") + " – " + end_date.strftime("%b %d")
                   if start_date != end_date else start_date.strftime("%b %d"))
+    vendor_label = ", ".join(args.vendor) if args.vendor else ""
     print(f"\n  AMD LLM API Usage — {date_label}  ({len(date_range)} day{'s' if len(date_range) != 1 else ''})"
-          f"{f'  (account: {account})' if account else ''}\n")
+          f"{f'  (account: {account})' if account else ''}"
+          f"{f'  (vendor: {vendor_label})' if vendor_label else ''}\n")
 
     print_summary(summaries, args.fmt)
 
