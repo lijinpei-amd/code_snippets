@@ -7,6 +7,7 @@ import functools
 import io
 import json
 import os
+import signal
 import urllib.error
 import urllib.request
 import urllib.parse
@@ -341,4 +342,6 @@ def main():
 
 
 if __name__ == "__main__":
+    # Exit quietly when the reader closes the pipe early (e.g. `| less`, then q).
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
     main()
