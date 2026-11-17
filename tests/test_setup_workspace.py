@@ -12,6 +12,83 @@ from workspace import setup_workspace as subject
 
 
 class SetupWorkspaceTests(unittest.TestCase):
+    def test_initial_setup_without_force_rejects_any_existing_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "workspaces"
+            empty = base / "empty"
+            empty.mkdir(parents=True)
+            workspace = base / "job"
+            workspace.mkdir()
+            marker = workspace / "keep"
+            marker.write_text("keep")
+            file_path = base / "file"
+            file_path.write_text("keep file")
+
+            with (
+                mock.patch.object(subject, "ensure_repos"),
+                mock.patch.object(subject, "discover_repos", return_value=[]),
+            ):
+                for identifier in ("empty", "job", "file"):
+                    with self.subTest(identifier=identifier):
+                        with self.assertRaisesRegex(
+                            subject.WorkspaceError, "use --force"
+                        ):
+                            subject.setup_workspace(identifier, base)
+
+            self.assertEqual(list(empty.iterdir()), [])
+            self.assertEqual(marker.read_text(), "keep")
+            self.assertEqual(file_path.read_text(), "keep file")
+
+    def test_force_clears_registrations_when_workspace_directory_is_gone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "central" / "project"
+            self.make_repo_with_origin_head(repo)
+            base = root / "workspaces"
+            workspace = base / "job"
+            worktree = workspace / repo.name
+            self.git("worktree", "add", "--detach", worktree, cwd=repo)
+            shutil.rmtree(workspace)
+
+            def run_git_only(cmd, **_kwargs):
+                if cmd[0] == "git":
+                    subprocess.run(cmd, check=True, capture_output=True)
+
+            with (
+                mock.patch.object(subject, "ensure_repos"),
+                mock.patch.object(subject, "discover_repos", return_value=[repo]),
+                mock.patch.object(subject, "run", side_effect=run_git_only),
+                mock.patch.object(subject, "validate_workspace_venv"),
+                mock.patch.object(subject, "activate_venv"),
+                mock.patch.object(subject, "post_setup"),
+            ):
+                subject.setup_workspace(
+                    "job", base, force=True, run_venv_setup=False
+                )
+
+            self.assertEqual((worktree / "tracked").read_text(), "content\n")
+            subject.validate_linked_worktree(worktree, repo)
+
+    def test_update_force_flag_reaches_add_worktree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve() / "workspaces"
+            workspace = base / "job"
+            workspace.mkdir(parents=True)
+            repo = Path(tmp) / "central" / "project"
+            argv = ["setup_workspace.py", "-u", "-f", "-p", str(base), "job"]
+
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(subject, "ensure_repos"),
+                mock.patch.object(subject, "discover_repos", return_value=[repo]),
+                mock.patch.object(
+                    subject, "add_worktree", return_value=None
+                ) as add_worktree,
+            ):
+                subject.main()
+
+            add_worktree.assert_called_once_with(workspace, repo, force=True)
+
     def test_invalid_identifiers_are_rejected_before_repo_changes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -64,6 +141,7 @@ class SetupWorkspaceTests(unittest.TestCase):
             root = Path(tmp)
             repo = root / "central" / "project"
             repo.mkdir(parents=True)
+            self.git("init", "--initial-branch=main", cwd=repo)
             old_cwd = Path.cwd()
             os.chdir(root)
             try:
@@ -306,6 +384,38 @@ class SetupWorkspaceTests(unittest.TestCase):
 
             run.assert_not_called()
 
+    def test_add_worktree_force_recovers_missing_registration_without_pruning_siblings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "central" / "project"
+            self.make_repo_with_origin_head(repo)
+
+            workspace = root / "workspaces" / "job"
+            workspace.mkdir(parents=True)
+            worktree = workspace / repo.name
+            sibling = root / "workspaces" / "sibling" / repo.name
+            self.git("worktree", "add", "--detach", worktree, cwd=repo)
+            self.git("worktree", "lock", worktree, cwd=repo)
+            self.git("worktree", "add", "--detach", sibling, cwd=repo)
+            shutil.rmtree(worktree)
+            shutil.rmtree(sibling)
+
+            with self.assertRaisesRegex(subject.WorkspaceError, "rerun with --force"):
+                subject.add_worktree(workspace, repo)
+            self.assertIn(worktree.resolve(), subject.registered_worktree_paths(repo))
+
+            self.assertEqual(
+                subject.add_worktree(workspace, repo, force=True), "project"
+            )
+
+            self.assertEqual((worktree / "tracked").read_text(), "content\n")
+            subject.validate_linked_worktree(worktree, repo)
+            self.assertIn(
+                sibling.resolve(), subject.registered_worktree_paths(repo)
+            )
+            self.assertFalse(sibling.exists())
+            self.assertEqual(subject.pending_projects(workspace), {"project"})
+
     def test_stale_registration_does_not_authenticate_replacement_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -415,6 +525,7 @@ class SetupWorkspaceTests(unittest.TestCase):
             scripts = root / "build-scripts"
             workspace.mkdir(parents=True)
             repo.mkdir(parents=True)
+            self.git("init", "--initial-branch=main", cwd=repo)
             scripts.mkdir()
             script = scripts / "01-aiter.sh"
             script.write_text("#!/usr/bin/env bash\n")
@@ -870,6 +981,21 @@ class SetupWorkspaceTests(unittest.TestCase):
                 "CompileFlags:\n"
                 f"  CompilationDatabase: '{yaml_path}'\n",
             )
+
+    def make_repo_with_origin_head(self, repo):
+        """Create a one-commit repo whose origin/HEAD points at origin/main."""
+        repo.mkdir(parents=True)
+        self.git("init", "--initial-branch=main", cwd=repo)
+        self.git("config", "user.name", "Workspace Test", cwd=repo)
+        self.git("config", "user.email", "workspace@example.invalid", cwd=repo)
+        (repo / "tracked").write_text("content\n")
+        self.git("add", "tracked", cwd=repo)
+        self.git("commit", "-m", "initial", cwd=repo)
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD", cwd=repo)
+        self.git(
+            "symbolic-ref", "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main", cwd=repo,
+        )
 
     @staticmethod
     def git(*args, cwd=None, check=True):

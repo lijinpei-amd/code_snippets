@@ -611,8 +611,13 @@ def initialize_required_submodules(repo_name, worktree_path):
         ])
 
 
-def add_worktree(workspace, repo):
-    """Returns the project name if a worktree was added, otherwise None."""
+def add_worktree(workspace, repo, force=False):
+    """Returns the project name if a worktree was added, otherwise None.
+
+    With *force*, a registration whose directory was deleted out-of-band is
+    cleared (even if locked) so the worktree can be re-added; without it, such
+    a registration is an error.
+    """
     repo_name = repo.name
     worktree_path = workspace / repo_name
 
@@ -634,6 +639,14 @@ def add_worktree(workspace, repo):
     if start_point is None:
         print(f"Warning: no default upstream branch in {repo.name}, skipping.", file=sys.stderr)
         return None
+
+    if worktree_path.resolve() in registered_worktree_paths(repo):
+        if not force:
+            raise WorkspaceError(
+                f"project directory '{worktree_path}' is missing but still "
+                f"registered by '{repo}'; rerun with --force to clear it"
+            )
+        remove_worktrees(workspace, [repo])
 
     print(f"Adding worktree for {repo_name} (detached at {start_point})...")
     run([
@@ -661,12 +674,18 @@ def setup_workspace(identifier, parent_dir, force=False, run_venv_setup=True):
     all_repos = discover_repos()
     active_repos = discover_repos(only_listed=True)
 
-    if workspace.exists():
-        if not force:
-            raise WorkspaceError(f"workspace '{workspace}' already exists")
-        print(f"Removing existing workspace: {workspace}")
+    if force:
+        if workspace.exists():
+            print(f"Removing existing workspace: {workspace}")
+        # Runs even when the workspace directory is gone: an out-of-band
+        # `rm -rf` leaves registrations that make `git worktree add` fail.
         remove_worktrees(workspace, all_repos)
-        shutil.rmtree(workspace)
+        if workspace.exists():
+            shutil.rmtree(workspace)
+    elif workspace.exists():
+        raise WorkspaceError(
+            f"workspace '{workspace}' already exists; use --force to recreate it"
+        )
 
     print(f"Creating workspace: {workspace}")
     workspace.mkdir(parents=True)
@@ -747,7 +766,7 @@ def post_setup(workspace, only_projects=None):
     print(f"\nWorkspace is ready at {workspace}")
 
 
-def update_workspace(identifier, parent_dir):
+def update_workspace(identifier, parent_dir, force=False):
     workspace = resolve_workspace_path(identifier, parent_dir)
     if not workspace.is_dir():
         raise WorkspaceError(f"workspace '{workspace}' does not exist")
@@ -759,7 +778,7 @@ def update_workspace(identifier, parent_dir):
     projects_to_build = pending_projects(workspace) & active_projects
 
     for repo in active_repos:
-        project = add_worktree(workspace, repo)
+        project = add_worktree(workspace, repo, force=force)
         if project is not None:
             projects_to_build.add(project)
 
@@ -783,13 +802,15 @@ def main():
         default=DEFAULT_PARENT,
         help=f"Base directory for the workspace (default: {DEFAULT_PARENT})",
     )
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument(
+    parser.add_argument(
         "-f", "--force",
         action="store_true",
-        help="Remove existing workspace before creating a new one",
+        help=(
+            "Remove existing workspace before creating a new one; with --update, "
+            "only clear stale registrations of deleted project directories"
+        ),
     )
-    mode.add_argument(
+    parser.add_argument(
         "-u", "--update",
         action="store_true",
         help="Update an existing workspace: clone any new repos, add missing worktrees, and build them",
@@ -802,7 +823,7 @@ def main():
     args = parser.parse_args()
     try:
         if args.update:
-            update_workspace(args.identifier, args.base_dir)
+            update_workspace(args.identifier, args.base_dir, force=args.force)
         else:
             setup_workspace(
                 args.identifier,
