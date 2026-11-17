@@ -3,7 +3,8 @@
 
 Creates a workspace directory, checks out detached worktrees from local clones
 in REPOS_DIR (started at each repo's upstream default branch), and sets up a
-Python virtual environment.
+Python virtual environment.  ``--component`` limits the run to a subset of the
+repositories listed in repos.txt.
 """
 
 import argparse
@@ -163,6 +164,50 @@ def read_repo_manifest():
     return entries
 
 
+def split_components(value):
+    """Split one ``--component`` argument into its comma-separated names."""
+    names = [name.strip() for name in value.split(",")]
+    if not all(names):
+        raise argparse.ArgumentTypeError(
+            f"invalid component list {value!r}: empty component name"
+        )
+    return names
+
+
+def select_components(requested):
+    """Validate requested component names against repos.txt.
+
+    Returns:
+        None when nothing was requested (every listed repository is used),
+        otherwise the set of requested repository basenames.
+
+    Raises:
+        WorkspaceError: A requested name is not a repository in repos.txt.
+    """
+    if requested is None:
+        return None
+    if isinstance(requested, str):
+        raise TypeError("components must be a collection of names, not a string")
+    if not requested:
+        raise WorkspaceError("no components selected")
+
+    known = [repo_name for _, repo_name in read_repo_manifest()]
+    unknown = sorted(set(requested) - set(known))
+    if unknown:
+        raise WorkspaceError(
+            f"unknown component(s) {', '.join(unknown)}; "
+            f"expected names from {REPOS_LIST}: {', '.join(known)}"
+        )
+    return set(requested)
+
+
+def filter_components(repos, components):
+    """Keep only *repos* named in *components* (all of them when None)."""
+    if components is None:
+        return list(repos)
+    return [repo for repo in repos if repo.name in components]
+
+
 def get_origin_url(repo):
     """Return a central clone's configured origin fetch URL."""
     try:
@@ -191,8 +236,13 @@ def verify_repo_origin(repo, expected_url):
         )
 
 
-def ensure_repos():
-    """Ensure REPOS_DIR exists and contains a clone for each URL in repos.txt."""
+def ensure_repos(components=None):
+    """Ensure REPOS_DIR exists and contains a clone for each URL in repos.txt.
+
+    Args:
+        components: Repository basenames to clone or refresh; None means every
+            repository in repos.txt.
+    """
     manifest = read_repo_manifest()
 
     REPOS_DIR.mkdir(parents=True, exist_ok=True)
@@ -200,13 +250,18 @@ def ensure_repos():
     pending = []
     for url, repo_name in manifest:
         target = REPOS_DIR / repo_name
+        selected = components is None or repo_name in components
 
         if target.exists():
+            # Verify unselected clones too: --force still removes their
+            # worktrees from the workspace being recreated.
             verify_repo_origin(target, url)
-            refresh_repo(target)
+            if selected:
+                refresh_repo(target)
             continue
 
-        pending.append((url, target))
+        if selected:
+            pending.append((url, target))
 
     if not pending:
         return
@@ -506,6 +561,76 @@ def validate_linked_worktree(worktree_path, repo):
         )
 
 
+def git_output(cwd, args, action):
+    """Run ``git -C cwd args`` and return its stdout.
+
+    Raises:
+        WorkspaceError: Git could not be run or exited non-zero; the message
+            reads "failed to <action>: <git error>".
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(cwd), *args],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError as exc:
+        raise WorkspaceError(f"failed to {action}: {exc}") from exc
+
+    if result.returncode != 0:
+        detail = (
+            (result.stderr or "").strip()
+            or (result.stdout or "").strip()
+            or "unknown git error"
+        )
+        raise WorkspaceError(f"failed to {action}: {detail}")
+    return result.stdout
+
+
+def unsaved_work(worktree_path, repo):
+    """Describe the work that removing a linked worktree would lose.
+
+    Removal deletes the checkout together with its HEAD and per-worktree refs,
+    so a commit survives only if a ref stored in *repo* itself (a branch, tag,
+    remote-tracking ref, stash, ...) reaches it.
+
+    Returns:
+        Human-readable problems; an empty list when removal loses nothing.
+    """
+    problems = []
+
+    # Also reports submodules with changes or a HEAD moved off the commit
+    # recorded by the superproject.
+    status = git_output(
+        worktree_path,
+        [
+            "status", "--porcelain", "-z",
+            "--untracked-files=normal", "--ignore-submodules=none",
+        ],
+        f"check '{worktree_path}' for uncommitted changes",
+    )
+    if status:
+        problems.append("uncommitted or untracked changes")
+
+    head = git_output(
+        worktree_path,
+        ["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"],
+        f"resolve HEAD of '{worktree_path}'",
+    ).strip()
+    # --single-worktree keeps the HEADs of other worktrees (other workspaces)
+    # out of --all: they do not save this work in the central clone.
+    unsaved_commits = int(git_output(
+        repo,
+        ["rev-list", "--count", "--single-worktree", head, "--not", "--all"],
+        f"check '{worktree_path}' for unsaved commits",
+    ))
+    if unsaved_commits:
+        problems.append(
+            f"{unsaved_commits} commit(s) not on any branch, tag or "
+            f"remote-tracking ref of '{repo}'"
+        )
+    return problems
+
+
 def remove_worktrees(workspace, repos):
     # Complete every listing before removing anything.  If even one central
     # clone cannot be inspected, preserving the existing workspace is safer
@@ -529,8 +654,10 @@ def remove_worktrees(workspace, repos):
     # Validate every existing registered checkout before removing any of them.
     # This both prevents partial teardown and keeps `git worktree remove
     # --force` from recursively deleting an unrelated directory that replaced
-    # a stale registered path.  A missing registered path is safe to pass to
-    # Git so that its stale metadata can be deregistered.
+    # a stale registered path or a checkout that still holds unsaved work.  A
+    # missing registered path is safe to pass to Git so that its stale
+    # metadata can be deregistered.
+    unsaved = []
     for repo in repos:
         worktree_path = worktree_paths[repo]
         if (
@@ -538,6 +665,16 @@ def remove_worktrees(workspace, repos):
             and worktree_path.exists()
         ):
             validate_linked_worktree(worktree_path, repo)
+            unsaved.extend(
+                f"  {worktree_path}: {problem}"
+                for problem in unsaved_work(worktree_path, repo)
+            )
+    if unsaved:
+        raise WorkspaceError(
+            "refusing to remove worktrees with unsaved work:\n"
+            + "\n".join(unsaved)
+            + "\ncommit it to a branch, stash it, or discard it first"
+        )
 
     removed = []
 
@@ -663,16 +800,21 @@ def add_worktree(workspace, repo, force=False):
     return repo_name
 
 
-def setup_workspace(identifier, parent_dir, force=False, run_venv_setup=True):
+def setup_workspace(
+    identifier, parent_dir, force=False, run_venv_setup=True, components=None,
+):
     workspace = resolve_workspace_path(identifier, parent_dir)
+    components = select_components(components)
 
-    ensure_repos()
+    ensure_repos(components)
 
     # Use all repos for removal (cleans stale registrations from repos removed from
     # repos.txt), but only repos.txt-listed repos for adding (so removing a URL from
     # repos.txt immediately excludes it from new workspaces).
+    # --force recreates the whole workspace, so it tears down every worktree
+    # regardless of --component.
     all_repos = discover_repos()
-    active_repos = discover_repos(only_listed=True)
+    active_repos = filter_components(discover_repos(only_listed=True), components)
 
     if force:
         if workspace.exists():
@@ -708,7 +850,7 @@ def setup_workspace(identifier, parent_dir, force=False, run_venv_setup=True):
     else:
         print("Skipping venv setup script (--skip-venv-setup).")
 
-    post_setup(workspace)
+    post_setup(workspace, only_projects=components)
 
 
 def post_setup(workspace, only_projects=None):
@@ -766,16 +908,27 @@ def post_setup(workspace, only_projects=None):
     print(f"\nWorkspace is ready at {workspace}")
 
 
-def update_workspace(identifier, parent_dir, force=False):
+def update_workspace(identifier, parent_dir, force=False, components=None):
     workspace = resolve_workspace_path(identifier, parent_dir)
     if not workspace.is_dir():
         raise WorkspaceError(f"workspace '{workspace}' does not exist")
+    components = select_components(components)
 
-    ensure_repos()
+    ensure_repos(components)
 
-    active_repos = discover_repos(only_listed=True)
+    listed_repos = discover_repos(only_listed=True)
+    active_repos = filter_components(listed_repos, components)
     active_projects = {repo.name for repo in active_repos}
-    projects_to_build = pending_projects(workspace) & active_projects
+    pending = pending_projects(workspace)
+    projects_to_build = pending & active_projects
+
+    # Pending builds of unselected components stay pending for a later run.
+    deferred = (pending & {repo.name for repo in listed_repos}) - active_projects
+    if deferred:
+        print(
+            "Builds still pending outside --component: "
+            + ", ".join(sorted(deferred))
+        )
 
     for repo in active_repos:
         project = add_worktree(workspace, repo, force=force)
@@ -783,7 +936,8 @@ def update_workspace(identifier, parent_dir, force=False):
             projects_to_build.add(project)
 
     if not projects_to_build:
-        print("No new worktrees added; workspace is already up to date.")
+        scope = "workspace is" if components is None else "selected components are"
+        print(f"No new worktrees added; {scope} already up to date.")
         return
 
     venv_path = workspace / "venv"
@@ -806,14 +960,29 @@ def main():
         "-f", "--force",
         action="store_true",
         help=(
-            "Remove existing workspace before creating a new one; with --update, "
-            "only clear stale registrations of deleted project directories"
+            "Remove existing workspace before creating a new one (stops if a "
+            "worktree has uncommitted changes or commits not on any ref of its "
+            "central clone); with --update, only clear stale registrations of "
+            "deleted project directories"
         ),
     )
     parser.add_argument(
         "-u", "--update",
         action="store_true",
         help="Update an existing workspace: clone any new repos, add missing worktrees, and build them",
+    )
+    parser.add_argument(
+        "-c", "--component",
+        dest="components",
+        action="extend",
+        type=split_components,
+        metavar="NAME",
+        help=(
+            f"Only clone, check out, and build this repo from {REPOS_LIST.name} "
+            "(its basename, e.g. triton); repeatable or comma-separated "
+            "(default: all repos). -f without -u still recreates the whole "
+            "workspace"
+        ),
     )
     parser.add_argument(
         "--skip-venv-setup",
@@ -823,13 +992,19 @@ def main():
     args = parser.parse_args()
     try:
         if args.update:
-            update_workspace(args.identifier, args.base_dir, force=args.force)
+            update_workspace(
+                args.identifier,
+                args.base_dir,
+                force=args.force,
+                components=args.components,
+            )
         else:
             setup_workspace(
                 args.identifier,
                 args.base_dir,
                 force=args.force,
                 run_venv_setup=not args.skip_venv_setup,
+                components=args.components,
             )
     except WorkspaceError as exc:
         parser.exit(1, f"Error: {exc}\n")

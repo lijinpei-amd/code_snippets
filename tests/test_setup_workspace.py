@@ -1,4 +1,7 @@
+import contextlib
+import io
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -980,6 +983,277 @@ class SetupWorkspaceTests(unittest.TestCase):
                 (source / ".clangd").read_text(),
                 "CompileFlags:\n"
                 f"  CompilationDatabase: '{yaml_path}'\n",
+            )
+
+    def write_two_repo_manifest(self, root):
+        repos_list = root / "repos.txt"
+        repos_list.write_text(
+            "https://example.invalid/org/alpha.git\n"
+            "https://example.invalid/org/beta.git\n"
+        )
+        return repos_list
+
+    def test_component_option_is_repeatable_and_comma_separated(self):
+        for mode_args, target in (([], "setup_workspace"), (["-u"], "update_workspace")):
+            argv = [
+                "setup_workspace.py", *mode_args,
+                "-c", "alpha,beta", "--component", "gamma", "job",
+            ]
+            with self.subTest(target=target):
+                with (
+                    mock.patch.object(sys, "argv", argv),
+                    mock.patch.object(subject, target) as entry,
+                ):
+                    subject.main()
+
+                self.assertEqual(
+                    entry.call_args.kwargs["components"], ["alpha", "beta", "gamma"]
+                )
+
+    def test_component_option_rejects_empty_name(self):
+        argv = ["setup_workspace.py", "-c", "alpha,", "job"]
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.object(subject, "setup_workspace") as setup,
+            mock.patch("sys.stderr"),
+        ):
+            with self.assertRaises(SystemExit):
+                subject.main()
+        setup.assert_not_called()
+
+    def test_unknown_component_is_rejected_before_repo_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "workspaces"
+            base.mkdir()
+            repos_list = self.write_two_repo_manifest(root)
+
+            with (
+                mock.patch.object(subject, "REPOS_LIST", repos_list),
+                mock.patch.object(subject, "ensure_repos") as ensure_repos,
+            ):
+                for entry in (subject.setup_workspace, subject.update_workspace):
+                    with self.subTest(entry=entry.__name__):
+                        (base / "job").mkdir(exist_ok=True)
+                        with self.assertRaisesRegex(
+                            subject.WorkspaceError, "unknown component.*gamma"
+                        ):
+                            entry("job", base, force=True, components=["gamma"])
+
+            ensure_repos.assert_not_called()
+
+    def test_ensure_repos_only_clones_selected_components(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repos = root / "repos"
+            repos_list = self.write_two_repo_manifest(root)
+
+            with (
+                mock.patch.object(subject, "REPOS_DIR", repos),
+                mock.patch.object(subject, "REPOS_LIST", repos_list),
+                mock.patch.object(subject, "clone_detached") as clone,
+            ):
+                subject.ensure_repos({"beta"})
+
+            clone.assert_called_once_with(
+                "https://example.invalid/org/beta.git", repos / "beta"
+            )
+
+    def test_setup_with_component_adds_only_selected_worktree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "workspaces"
+            repos_list = self.write_two_repo_manifest(root)
+            alpha = root / "central" / "alpha"
+            beta = root / "central" / "beta"
+
+            with (
+                mock.patch.object(subject, "REPOS_LIST", repos_list),
+                mock.patch.object(subject, "ensure_repos") as ensure_repos,
+                mock.patch.object(
+                    subject, "discover_repos", return_value=[alpha, beta]
+                ),
+                mock.patch.object(subject, "add_worktree") as add_worktree,
+                mock.patch.object(subject, "run"),
+                mock.patch.object(subject, "validate_workspace_venv"),
+                mock.patch.object(subject, "activate_venv"),
+                mock.patch.object(subject, "post_setup") as post_setup,
+            ):
+                subject.setup_workspace(
+                    "job", base, run_venv_setup=False, components=["beta"]
+                )
+
+            ensure_repos.assert_called_once_with({"beta"})
+            add_worktree.assert_called_once_with(base.resolve() / "job", beta)
+            post_setup.assert_called_once_with(
+                base.resolve() / "job", only_projects={"beta"}
+            )
+
+    def test_update_with_component_leaves_other_pending_builds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "workspaces"
+            workspace = (base / "job")
+            scripts = root / "build-scripts"
+            scripts.mkdir()
+            for name in ("alpha", "beta"):
+                (workspace / name).mkdir(parents=True)
+                (scripts / f"01-{name}.sh").write_text("#!/usr/bin/env bash\n")
+            workspace = workspace.resolve()
+            repos_list = self.write_two_repo_manifest(root)
+            alpha = root / "central" / "alpha"
+            beta = root / "central" / "beta"
+            subject.mark_projects_pending(workspace, {"alpha", "beta"})
+
+            output = io.StringIO()
+            with (
+                mock.patch.object(subject, "REPOS_LIST", repos_list),
+                mock.patch.object(subject, "BUILD_SCRIPTS_DIR", scripts),
+                mock.patch.object(subject, "ensure_repos"),
+                mock.patch.object(
+                    subject, "discover_repos", return_value=[alpha, beta]
+                ),
+                mock.patch.object(
+                    subject, "add_worktree", return_value=None
+                ) as add_worktree,
+                mock.patch.object(subject, "validate_workspace_venv"),
+                mock.patch.object(subject, "activate_venv"),
+                mock.patch.object(subject, "run") as run,
+                contextlib.redirect_stdout(output),
+            ):
+                subject.update_workspace("job", base, components=["beta"])
+
+            add_worktree.assert_called_once_with(workspace, beta, force=False)
+            run.assert_called_once_with([
+                "bash", str(scripts / "01-beta.sh"), str(workspace / "beta"),
+                str(workspace / "build" / "beta"),
+                str(workspace / "install" / "beta"),
+            ])
+            self.assertEqual(subject.pending_projects(workspace), {"alpha"})
+            self.assertIn("pending outside --component: alpha", output.getvalue())
+
+    def test_empty_component_selection_is_rejected(self):
+        with self.assertRaisesRegex(subject.WorkspaceError, "no components"):
+            subject.select_components([])
+
+    def test_ensure_repos_verifies_unselected_clones_without_refreshing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repos = root / "repos"
+            (repos / "alpha").mkdir(parents=True)
+            repos_list = self.write_two_repo_manifest(root)
+
+            with (
+                mock.patch.object(subject, "REPOS_DIR", repos),
+                mock.patch.object(subject, "REPOS_LIST", repos_list),
+                mock.patch.object(
+                    subject,
+                    "get_origin_url",
+                    return_value="https://example.invalid/wrong/alpha.git",
+                ),
+                mock.patch.object(subject, "refresh_repo") as refresh_repo,
+                mock.patch.object(subject, "clone_detached") as clone,
+            ):
+                with self.assertRaisesRegex(subject.WorkspaceError, "does not match"):
+                    subject.ensure_repos({"beta"})
+
+            refresh_repo.assert_not_called()
+            clone.assert_not_called()
+
+    def make_workspace_with_two_worktrees(self, root):
+        """Return (base, workspace, {name: (repo, worktree)}) with clean worktrees."""
+        base = root / "workspaces"
+        workspace = base / "job"
+        workspace.mkdir(parents=True)
+        projects = {}
+        for name in ("alpha", "beta"):
+            repo = root / "central" / name
+            self.make_repo_with_origin_head(repo)
+            # Leave only origin/main so local branches don't hide lost commits.
+            self.git("checkout", "--detach", cwd=repo)
+            self.git("branch", "-D", "main", cwd=repo)
+            worktree = workspace / name
+            self.git("worktree", "add", "--detach", worktree, "origin/main", cwd=repo)
+            projects[name] = (repo, worktree)
+        return base, workspace, projects
+
+    def force_setup(self, base, repos):
+        with (
+            mock.patch.object(subject, "ensure_repos"),
+            mock.patch.object(subject, "discover_repos", return_value=repos),
+            mock.patch.object(subject, "add_worktree"),
+            mock.patch.object(subject, "run"),
+            mock.patch.object(subject, "validate_workspace_venv"),
+            mock.patch.object(subject, "activate_venv"),
+            mock.patch.object(subject, "post_setup"),
+        ):
+            subject.setup_workspace("job", base, force=True, run_venv_setup=False)
+
+    def test_force_refuses_to_remove_worktrees_with_unsaved_work(self):
+        def modify_tracked(worktree):
+            (worktree / "tracked").write_text("edited\n")
+
+        def stage_change(worktree):
+            modify_tracked(worktree)
+            self.git("add", "tracked", cwd=worktree)
+
+        def add_untracked(worktree):
+            (worktree / "notes.txt").write_text("draft\n")
+
+        def commit_detached(worktree):
+            self.git("config", "user.name", "Workspace Test", cwd=worktree)
+            self.git(
+                "config", "user.email", "workspace@example.invalid", cwd=worktree
+            )
+            self.git("commit", "--allow-empty", "-m", "wip", cwd=worktree)
+
+        cases = {
+            "modified": (modify_tracked, "uncommitted"),
+            "staged": (stage_change, "uncommitted"),
+            "untracked": (add_untracked, "uncommitted"),
+            "detached commit": (commit_detached, "1 commit"),
+        }
+        for label, (make_work, message) in cases.items():
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                base, workspace, projects = self.make_workspace_with_two_worktrees(root)
+                marker = workspace / "keep"
+                marker.write_text("keep")
+                beta_repo, beta_worktree = projects["beta"]
+                make_work(beta_worktree)
+
+                with self.assertRaisesRegex(
+                    subject.WorkspaceError,
+                    f"unsaved work:\n  {re.escape(str(beta_worktree))}: {message}",
+                ):
+                    self.force_setup(base, [repo for repo, _ in projects.values()])
+
+                self.assertEqual(marker.read_text(), "keep")
+                for repo, worktree in projects.values():
+                    self.assertTrue(worktree.is_dir())
+                    self.assertIn(
+                        worktree.resolve(), subject.registered_worktree_paths(repo)
+                    )
+
+    def test_force_removes_worktree_whose_commits_are_on_a_branch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base, workspace, projects = self.make_workspace_with_two_worktrees(root)
+            beta_repo, beta_worktree = projects["beta"]
+            self.git("config", "user.name", "Workspace Test", cwd=beta_worktree)
+            self.git(
+                "config", "user.email", "workspace@example.invalid", cwd=beta_worktree
+            )
+            self.git("switch", "-c", "feature", cwd=beta_worktree)
+            self.git("commit", "--allow-empty", "-m", "saved", cwd=beta_worktree)
+            feature = self.git("rev-parse", "HEAD", cwd=beta_worktree).stdout.strip()
+
+            self.force_setup(base, [repo for repo, _ in projects.values()])
+
+            self.assertFalse(beta_worktree.exists())
+            self.assertEqual(
+                self.git("rev-parse", "feature", cwd=beta_repo).stdout.strip(),
+                feature,
             )
 
     def make_repo_with_origin_head(self, repo):
