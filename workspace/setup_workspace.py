@@ -3,7 +3,7 @@
 
 Creates a workspace directory, checks out detached worktrees from local clones
 in REPOS_DIR (started at each repo's upstream default branch), and sets up a
-Python virtual environment.  ``--component`` limits the run to a subset of the
+Python virtual environment.  ``--components`` limits the run to a subset of the
 repositories listed in repos.txt.
 """
 
@@ -165,7 +165,7 @@ def read_repo_manifest():
 
 
 def split_components(value):
-    """Split one ``--component`` argument into its comma-separated names."""
+    """Split one ``--components`` argument into its comma-separated names."""
     names = [name.strip() for name in value.split(",")]
     if not all(names):
         raise argparse.ArgumentTypeError(
@@ -174,38 +174,37 @@ def split_components(value):
     return names
 
 
-def select_components(requested):
-    """Validate requested component names against repos.txt.
+def load_components(requested=None):
+    """Read repos.txt and resolve which of its repositories to act on.
+
+    Args:
+        requested: Repository basenames from ``--components``; None selects
+            every repository in repos.txt.
 
     Returns:
-        None when nothing was requested (every listed repository is used),
-        otherwise the set of requested repository basenames.
+        ``(manifest, selected)``: every ``(url, name)`` entry of repos.txt and
+        the set of repository names to act on.
 
     Raises:
-        WorkspaceError: A requested name is not a repository in repos.txt.
+        WorkspaceError: repos.txt is invalid, or *requested* is empty or names
+            a repository that repos.txt does not list.
     """
+    manifest = read_repo_manifest()
+    known = [repo_name for _, repo_name in manifest]
     if requested is None:
-        return None
+        return manifest, set(known)
     if isinstance(requested, str):
         raise TypeError("components must be a collection of names, not a string")
     if not requested:
         raise WorkspaceError("no components selected")
 
-    known = [repo_name for _, repo_name in read_repo_manifest()]
     unknown = sorted(set(requested) - set(known))
     if unknown:
         raise WorkspaceError(
             f"unknown component(s) {', '.join(unknown)}; "
             f"expected names from {REPOS_LIST}: {', '.join(known)}"
         )
-    return set(requested)
-
-
-def filter_components(repos, components):
-    """Keep only *repos* named in *components* (all of them when None)."""
-    if components is None:
-        return list(repos)
-    return [repo for repo in repos if repo.name in components]
+    return manifest, set(requested)
 
 
 def get_origin_url(repo):
@@ -236,31 +235,28 @@ def verify_repo_origin(repo, expected_url):
         )
 
 
-def ensure_repos(components=None):
-    """Ensure REPOS_DIR exists and contains a clone for each URL in repos.txt.
+def ensure_repos(manifest, selected):
+    """Clone or refresh the *selected* repositories of *manifest* in REPOS_DIR.
 
     Args:
-        components: Repository basenames to clone or refresh; None means every
-            repository in repos.txt.
+        manifest: Every ``(url, name)`` entry of repos.txt.
+        selected: Names of the repositories to clone or refresh.
     """
-    manifest = read_repo_manifest()
-
     REPOS_DIR.mkdir(parents=True, exist_ok=True)
 
     pending = []
     for url, repo_name in manifest:
         target = REPOS_DIR / repo_name
-        selected = components is None or repo_name in components
 
         if target.exists():
             # Verify unselected clones too: --force still removes their
             # worktrees from the workspace being recreated.
             verify_repo_origin(target, url)
-            if selected:
+            if repo_name in selected:
                 refresh_repo(target)
             continue
 
-        if selected:
+        if repo_name in selected:
             pending.append((url, target))
 
     if not pending:
@@ -311,11 +307,8 @@ def clone_detached(url, target):
         run(["git", "-C", str(target), "branch", "-D", *local_branches])
 
 
-def discover_repos(only_listed=False):
-    listed = None
-    if only_listed:
-        listed = {repo_name for _, repo_name in read_repo_manifest()}
-
+def discover_repos(names=None):
+    """Return the central clones in REPOS_DIR, limited to *names* if given."""
     if not REPOS_DIR.is_dir():
         print(f"Warning: no repos found in {REPOS_DIR}", file=sys.stderr)
         return []
@@ -323,8 +316,8 @@ def discover_repos(only_listed=False):
     if not repos:
         print(f"Warning: no repos found in {REPOS_DIR}", file=sys.stderr)
         return repos
-    if listed is not None:
-        repos = [r for r in repos if r.name in listed]
+    if names is not None:
+        repos = [r for r in repos if r.name in names]
     return repos
 
 
@@ -804,17 +797,17 @@ def setup_workspace(
     identifier, parent_dir, force=False, run_venv_setup=True, components=None,
 ):
     workspace = resolve_workspace_path(identifier, parent_dir)
-    components = select_components(components)
+    manifest, selected = load_components(components)
 
-    ensure_repos(components)
+    ensure_repos(manifest, selected)
 
     # Use all repos for removal (cleans stale registrations from repos removed from
-    # repos.txt), but only repos.txt-listed repos for adding (so removing a URL from
-    # repos.txt immediately excludes it from new workspaces).
+    # repos.txt), but only selected repos.txt-listed repos for adding (so removing
+    # a URL from repos.txt immediately excludes it from new workspaces).
     # --force recreates the whole workspace, so it tears down every worktree
-    # regardless of --component.
+    # regardless of --components.
     all_repos = discover_repos()
-    active_repos = filter_components(discover_repos(only_listed=True), components)
+    active_repos = discover_repos(selected)
 
     if force:
         if workspace.exists():
@@ -850,7 +843,7 @@ def setup_workspace(
     else:
         print("Skipping venv setup script (--skip-venv-setup).")
 
-    post_setup(workspace, only_projects=components)
+    post_setup(workspace, only_projects={repo.name for repo in active_repos})
 
 
 def post_setup(workspace, only_projects=None):
@@ -912,21 +905,21 @@ def update_workspace(identifier, parent_dir, force=False, components=None):
     workspace = resolve_workspace_path(identifier, parent_dir)
     if not workspace.is_dir():
         raise WorkspaceError(f"workspace '{workspace}' does not exist")
-    components = select_components(components)
+    manifest, selected = load_components(components)
 
-    ensure_repos(components)
+    ensure_repos(manifest, selected)
 
-    listed_repos = discover_repos(only_listed=True)
-    active_repos = filter_components(listed_repos, components)
+    active_repos = discover_repos(selected)
     active_projects = {repo.name for repo in active_repos}
     pending = pending_projects(workspace)
     projects_to_build = pending & active_projects
 
     # Pending builds of unselected components stay pending for a later run.
-    deferred = (pending & {repo.name for repo in listed_repos}) - active_projects
+    listed_projects = {repo_name for _, repo_name in manifest}
+    deferred = (pending & listed_projects) - active_projects
     if deferred:
         print(
-            "Builds still pending outside --component: "
+            "Builds still pending outside --components: "
             + ", ".join(sorted(deferred))
         )
 
@@ -972,14 +965,14 @@ def main():
         help="Update an existing workspace: clone any new repos, add missing worktrees, and build them",
     )
     parser.add_argument(
-        "-c", "--component",
+        "-c", "--components", "--component",
         dest="components",
         action="extend",
         type=split_components,
-        metavar="NAME",
+        metavar="LIST",
         help=(
-            f"Only clone, check out, and build this repo from {REPOS_LIST.name} "
-            "(its basename, e.g. triton); repeatable or comma-separated "
+            f"Comma-separated repos from {REPOS_LIST.name} (basenames, e.g. "
+            "triton,aiter) to clone, check out, and build; repeatable "
             "(default: all repos). -f without -u still recreates the whole "
             "workspace"
         ),

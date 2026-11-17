@@ -15,6 +15,17 @@ from workspace import setup_workspace as subject
 
 
 class SetupWorkspaceTests(unittest.TestCase):
+    def setUp(self):
+        # Keep tests independent of the real repos.txt beside the script; tests
+        # that need entries patch REPOS_LIST again.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        manifest = Path(tmp.name) / "repos.txt"
+        manifest.write_text("")
+        patcher = mock.patch.object(subject, "REPOS_LIST", manifest)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_initial_setup_without_force_rejects_any_existing_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "workspaces"
@@ -279,7 +290,7 @@ class SetupWorkspaceTests(unittest.TestCase):
                 mock.patch.object(subject, "REPOS_DIR", repos),
                 mock.patch.object(subject, "REPOS_LIST", repos_list),
             ):
-                subject.ensure_repos()
+                subject.ensure_repos(*subject.load_components())
 
             self.assertEqual(
                 subject.find_default_upstream_ref(central),
@@ -317,9 +328,7 @@ class SetupWorkspaceTests(unittest.TestCase):
                 mock.patch.object(subject, "REPOS_LIST", missing_manifest),
             ):
                 with self.assertRaisesRegex(subject.WorkspaceError, "does not exist"):
-                    subject.ensure_repos()
-                with self.assertRaisesRegex(subject.WorkspaceError, "does not exist"):
-                    subject.discover_repos(only_listed=True)
+                    subject.setup_workspace("job", root / "workspaces")
 
             self.assertFalse(repos.exists())
 
@@ -340,7 +349,7 @@ class SetupWorkspaceTests(unittest.TestCase):
                 with self.assertRaisesRegex(
                     subject.WorkspaceError, "duplicate repository basename"
                 ):
-                    subject.ensure_repos()
+                    subject.ensure_repos(*subject.load_components())
 
             self.assertFalse(repos.exists())
 
@@ -364,7 +373,7 @@ class SetupWorkspaceTests(unittest.TestCase):
                 mock.patch.object(subject, "refresh_repo") as refresh_repo,
             ):
                 with self.assertRaisesRegex(subject.WorkspaceError, "does not match"):
-                    subject.ensure_repos()
+                    subject.ensure_repos(*subject.load_components())
 
             refresh_repo.assert_not_called()
 
@@ -993,11 +1002,20 @@ class SetupWorkspaceTests(unittest.TestCase):
         )
         return repos_list
 
+    @staticmethod
+    def make_central_dir(root, *names):
+        """Create stand-in central clones that discover_repos recognizes."""
+        central = root / "central"
+        for name in names:
+            (central / name / ".git").mkdir(parents=True)
+        return central
+
     def test_component_option_is_repeatable_and_comma_separated(self):
         for mode_args, target in (([], "setup_workspace"), (["-u"], "update_workspace")):
             argv = [
                 "setup_workspace.py", *mode_args,
-                "-c", "alpha,beta", "--component", "gamma", "job",
+                "-c", "alpha,beta", "--components", "gamma",
+                "--component", "delta", "job",
             ]
             with self.subTest(target=target):
                 with (
@@ -1007,7 +1025,8 @@ class SetupWorkspaceTests(unittest.TestCase):
                     subject.main()
 
                 self.assertEqual(
-                    entry.call_args.kwargs["components"], ["alpha", "beta", "gamma"]
+                    entry.call_args.kwargs["components"],
+                    ["alpha", "beta", "gamma", "delta"],
                 )
 
     def test_component_option_rejects_empty_name(self):
@@ -1053,7 +1072,7 @@ class SetupWorkspaceTests(unittest.TestCase):
                 mock.patch.object(subject, "REPOS_LIST", repos_list),
                 mock.patch.object(subject, "clone_detached") as clone,
             ):
-                subject.ensure_repos({"beta"})
+                subject.ensure_repos(*subject.load_components(["beta"]))
 
             clone.assert_called_once_with(
                 "https://example.invalid/org/beta.git", repos / "beta"
@@ -1064,15 +1083,17 @@ class SetupWorkspaceTests(unittest.TestCase):
             root = Path(tmp)
             base = root / "workspaces"
             repos_list = self.write_two_repo_manifest(root)
-            alpha = root / "central" / "alpha"
-            beta = root / "central" / "beta"
+            central = self.make_central_dir(root, "alpha", "beta")
+            beta = central / "beta"
 
             with (
                 mock.patch.object(subject, "REPOS_LIST", repos_list),
-                mock.patch.object(subject, "ensure_repos") as ensure_repos,
+                mock.patch.object(subject, "REPOS_DIR", central),
                 mock.patch.object(
-                    subject, "discover_repos", return_value=[alpha, beta]
-                ),
+                    subject, "read_repo_manifest",
+                    wraps=subject.read_repo_manifest,
+                ) as read_manifest,
+                mock.patch.object(subject, "ensure_repos") as ensure_repos,
                 mock.patch.object(subject, "add_worktree") as add_worktree,
                 mock.patch.object(subject, "run"),
                 mock.patch.object(subject, "validate_workspace_venv"),
@@ -1083,7 +1104,8 @@ class SetupWorkspaceTests(unittest.TestCase):
                     "job", base, run_venv_setup=False, components=["beta"]
                 )
 
-            ensure_repos.assert_called_once_with({"beta"})
+            read_manifest.assert_called_once_with()
+            self.assertEqual(ensure_repos.call_args.args[1], {"beta"})
             add_worktree.assert_called_once_with(base.resolve() / "job", beta)
             post_setup.assert_called_once_with(
                 base.resolve() / "job", only_projects={"beta"}
@@ -1101,18 +1123,16 @@ class SetupWorkspaceTests(unittest.TestCase):
                 (scripts / f"01-{name}.sh").write_text("#!/usr/bin/env bash\n")
             workspace = workspace.resolve()
             repos_list = self.write_two_repo_manifest(root)
-            alpha = root / "central" / "alpha"
-            beta = root / "central" / "beta"
+            central = self.make_central_dir(root, "alpha", "beta")
+            beta = central / "beta"
             subject.mark_projects_pending(workspace, {"alpha", "beta"})
 
             output = io.StringIO()
             with (
                 mock.patch.object(subject, "REPOS_LIST", repos_list),
+                mock.patch.object(subject, "REPOS_DIR", central),
                 mock.patch.object(subject, "BUILD_SCRIPTS_DIR", scripts),
                 mock.patch.object(subject, "ensure_repos"),
-                mock.patch.object(
-                    subject, "discover_repos", return_value=[alpha, beta]
-                ),
                 mock.patch.object(
                     subject, "add_worktree", return_value=None
                 ) as add_worktree,
@@ -1130,11 +1150,11 @@ class SetupWorkspaceTests(unittest.TestCase):
                 str(workspace / "install" / "beta"),
             ])
             self.assertEqual(subject.pending_projects(workspace), {"alpha"})
-            self.assertIn("pending outside --component: alpha", output.getvalue())
+            self.assertIn("pending outside --components: alpha", output.getvalue())
 
     def test_empty_component_selection_is_rejected(self):
         with self.assertRaisesRegex(subject.WorkspaceError, "no components"):
-            subject.select_components([])
+            subject.load_components([])
 
     def test_ensure_repos_verifies_unselected_clones_without_refreshing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1155,7 +1175,7 @@ class SetupWorkspaceTests(unittest.TestCase):
                 mock.patch.object(subject, "clone_detached") as clone,
             ):
                 with self.assertRaisesRegex(subject.WorkspaceError, "does not match"):
-                    subject.ensure_repos({"beta"})
+                    subject.ensure_repos(*subject.load_components(["beta"]))
 
             refresh_repo.assert_not_called()
             clone.assert_not_called()
