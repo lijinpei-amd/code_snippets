@@ -3,12 +3,22 @@ set -euo pipefail
 
 if [ $# -lt 1 ]; then
     echo "usage: $(basename "$0") <llvm-project-path>" >&2
+    echo "  needs an activated workspace venv; installs PyPI cmake into it" >&2
     echo "  builds into <llvm-project-path>/build (in-tree, required for" >&2
     echo "  cross-worktree ccache sharing — see ccache.conf base_dir)" >&2
     exit 2
 fi
 
 LLVM_PROJECT_PATH="$1"
+
+# LLVM's cmake_minimum_required (llvm/CMakeLists.txt) outpaces distro CMake
+# packages, so build with the PyPI cmake installed into the workspace venv.
+# Stay below 4: that cmake lands first on the venv PATH, and Triton (built from
+# the same venv without build isolation) requires cmake<4.0.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/venv.sh"
+uv_install 'cmake>=3.31,<4'
+CMAKE="$VIRTUAL_ENV/bin/cmake"
+
 # Build in-tree at <worktree>/build. Keeping the build dir inside the worktree
 # is what makes ccache's base_dir cancel the workspace/NN prefix, so identical
 # sources hit across worktrees instead of each worktree being its own silo.
@@ -58,8 +68,8 @@ CMAKE_ARGS=(
     -B"$LLVM_BUILD_PATH" "$LLVM_PROJECT_PATH/llvm"
 )
 
-cmake "${CMAKE_ARGS[@]}"
-cmake --build "$LLVM_BUILD_PATH"
+"$CMAKE" "${CMAKE_ARGS[@]}"
+"$CMAKE" --build "$LLVM_BUILD_PATH"
 
 LLVM_BUILD_PATH_YAML=${LLVM_BUILD_PATH//\'/\'\'}
 cat > "$LLVM_PROJECT_PATH/.clangd" <<EOF
